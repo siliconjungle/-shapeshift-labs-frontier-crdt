@@ -14,7 +14,8 @@ This package sits above [`@shapeshift-labs/frontier`](https://www.npmjs.com/pack
 - [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec): shared patch/history codec layer used below CRDT update tooling.
 - [`@shapeshift-labs/frontier-engine`](https://www.npmjs.com/package/@shapeshift-labs/frontier-engine): planned diff engine and history planning.
 - [`@shapeshift-labs/frontier-state`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state): state-engine integration for CRDT-backed state views.
-- [`@shapeshift-labs/frontier-crdt-sync`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-sync): reserved for repo, storage, provider, sync protocol, and binding contracts. The npm name is still a deprecated placeholder.
+- [`@shapeshift-labs/frontier-crdt-sync`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-sync): repo, storage, provider, sync protocol, document URL, local network, model-checking, and binding contracts.
+- [`@shapeshift-labs/frontier-crdt-websocket`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-websocket): WebSocket transport package above `frontier-crdt-sync`.
 
 Package source repositories:
 
@@ -24,6 +25,8 @@ Package source repositories:
 - [`siliconjungle/-shapeshift-labs-frontier-engine`](https://github.com/siliconjungle/-shapeshift-labs-frontier-engine)
 - [`siliconjungle/-shapeshift-labs-frontier-state`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state)
 - [`siliconjungle/-shapeshift-labs-frontier-crdt`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt)
+- [`siliconjungle/-shapeshift-labs-frontier-crdt-sync`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-sync)
+- [`siliconjungle/-shapeshift-labs-frontier-crdt-websocket`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt-websocket)
 
 ## Install
 
@@ -89,7 +92,7 @@ This package is intentionally limited to:
 - CRDT update encode/decode/merge/diff/inspect/filter/obfuscate helpers.
 - Durable versioning, snapshots, checkout/fork helpers, branch wrappers, conflict introspection, awareness, and undo.
 
-It does not expose sync providers, repos, storage adapters, document URLs, local sync networks, model-checking transports, or editor text bindings. Those belong in the higher `@shapeshift-labs/frontier-crdt-sync` package.
+It does not expose sync providers, repos, storage adapters, document URLs, local sync networks, model-checking transports, WebSocket transports, or editor text bindings. Those belong in the higher `@shapeshift-labs/frontier-crdt-sync` and `@shapeshift-labs/frontier-crdt-websocket` packages.
 
 ## TypeScript
 
@@ -112,14 +115,14 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 3 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 5 rounds:
 
 | Fixture | Median | p95 |
 | --- | ---: | ---: |
-| Local text insert transaction | 5.17 us | 6.67 us |
-| Incremental text typing, 100 chars | 189.57 us | 194.68 us |
-| Update inspect metadata | 9.58 us | 10.95 us |
-| Merge duplicate updates | 11.06 us | 12.02 us |
+| Local text insert transaction | 6.52 us | 13.96 us |
+| Incremental text typing, 100 chars | 196.60 us | 265.90 us |
+| Update inspect metadata | 8.41 us | 12.35 us |
+| Merge duplicate updates | 9.90 us | 10.43 us |
 
 These are Frontier-only package measurements, not competitor comparisons.
 
