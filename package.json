@@ -1,6 +1,6 @@
 {
   "name": "@shapeshift-labs/frontier-crdt",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Native CRDT documents, updates, awareness, branches, conflicts, and undo for Frontier.",
   "type": "module",
   "license": "MIT",
@@ -73,11 +73,11 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test": "npm run build && npm run typecheck && node test/smoke.mjs && node test/fuzz.mjs --cases 160",
+    "test": "npm run build && npm run typecheck && node test/smoke.mjs && node test/hardening.mjs --cases 80 && node test/fuzz.mjs --cases 160",
     "prepack": "npm run test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "fuzz": "npm run build && node test/fuzz.mjs",
-    "bench": "npm run build && node benchmarks/package-bench.mjs",
+    "fuzz": "npm run build && node test/hardening.mjs --cases 180 && node test/fuzz.mjs",
+    "bench": "npm run build && node --expose-gc benchmarks/package-bench.mjs",
     "pack:dry": "npm pack --dry-run"
   },
   "keywords": [
