@@ -1,51 +1,127 @@
 # Frontier CRDT
 
-Reserved package name for the future Frontier CRDT document layer.
+Native CRDT documents, update tooling, awareness, branches, conflict introspection, and undo for Frontier.
 
-This package is not ready for production use. It exists so the package and repository names are reserved while the CRDT document, update, branch, undo, and awareness boundaries are finalized.
+This package sits above [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier), [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec), [`@shapeshift-labs/frontier-engine`](https://www.npmjs.com/package/@shapeshift-labs/frontier-engine), and [`@shapeshift-labs/frontier-state`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state). It keeps collaborative document state separate from the small JSON diff/apply core package and from the higher sync/repo/storage package.
 
 - npm: [`@shapeshift-labs/frontier-crdt`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt)
 - source: [`siliconjungle/-shapeshift-labs-frontier-crdt`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt)
-- core package: [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier)
-- codec package: [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec)
 - license: MIT
 
-## Intended Scope
+## Related Packages
 
-When this package graduates from placeholder status, it is expected to contain:
+- [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier): core JSON diff/apply primitives.
+- [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec): shared patch/history codec layer used below CRDT update tooling.
+- [`@shapeshift-labs/frontier-engine`](https://www.npmjs.com/package/@shapeshift-labs/frontier-engine): planned diff engine and history planning.
+- [`@shapeshift-labs/frontier-state`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state): state-engine integration for CRDT-backed state views.
+- [`@shapeshift-labs/frontier-crdt-sync`](https://www.npmjs.com/package/@shapeshift-labs/frontier-crdt-sync): reserved for repo, storage, provider, sync protocol, and binding contracts. The npm name is still a deprecated placeholder.
 
-- native CRDT document creation and document handles;
-- JSON map/list/text/counter/binary/tree/XML operations;
-- CRDT update encode/decode/merge/diff/inspect/filter/obfuscate helpers;
-- durable versioning, snapshots, checkout/fork helpers, and branch wrappers;
-- conflict introspection, awareness, and CRDT-aware undo.
+Package source repositories:
 
-It should depend on `@shapeshift-labs/frontier` and `@shapeshift-labs/frontier-codec`. Sync providers, repos, storage adapters, document URLs, local sync networks, and editor bindings belong above this package.
+- [`siliconjungle/-shapeshift-labs-frontier`](https://github.com/siliconjungle/-shapeshift-labs-frontier)
+- [`siliconjungle/-shapeshift-labs-frontier-query`](https://github.com/siliconjungle/-shapeshift-labs-frontier-query)
+- [`siliconjungle/-shapeshift-labs-frontier-codec`](https://github.com/siliconjungle/-shapeshift-labs-frontier-codec)
+- [`siliconjungle/-shapeshift-labs-frontier-engine`](https://github.com/siliconjungle/-shapeshift-labs-frontier-engine)
+- [`siliconjungle/-shapeshift-labs-frontier-state`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state)
+- [`siliconjungle/-shapeshift-labs-frontier-crdt`](https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt)
 
-## Current Status
+## Install
 
-Use [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier) for the stable JSON diff/apply core and [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec) for patch transport codecs.
+```sh
+npm install @shapeshift-labs/frontier @shapeshift-labs/frontier-codec @shapeshift-labs/frontier-engine @shapeshift-labs/frontier-state @shapeshift-labs/frontier-crdt
+```
 
-The CRDT package is reserved only. No runtime API is exported yet.
+## Usage
 
-## Package Family
+```ts
+import { createCrdtDocument } from '@shapeshift-labs/frontier-crdt';
+import { inspectCrdtUpdate } from '@shapeshift-labs/frontier-crdt/update';
 
-Published or active packages:
+const alice = createCrdtDocument({ actorId: 'alice' });
+alice.set('/title', 'Draft');
+alice.text('/body').insert(0, 'Hello');
 
-- [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier)
-- [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec)
-- [`@shapeshift-labs/frontier-mutation`](https://www.npmjs.com/package/@shapeshift-labs/frontier-mutation)
+const update = alice.exportUpdate();
+console.log(inspectCrdtUpdate(update).ranges);
 
-Reserved future packages:
+const bob = createCrdtDocument({ actorId: 'bob' });
+bob.applyUpdate(update);
 
-- `@shapeshift-labs/frontier-engine`
-- `@shapeshift-labs/frontier-state`
-- `@shapeshift-labs/frontier-crdt-sync`
-- `@shapeshift-labs/frontier-richtext`
-- `@shapeshift-labs/frontier-logging`
-- `@shapeshift-labs/frontier-state-cache`
-- `@shapeshift-labs/frontier-event-log`
-- `@shapeshift-labs/frontier-schema`
+console.log(bob.toJSON());
+```
+
+## API
+
+```ts
+import {
+  createCrdtDocument,
+  createCrdtDocumentFromSnapshot
+} from '@shapeshift-labs/frontier-crdt';
+
+import {
+  decodeCrdtUpdate,
+  diffCrdtUpdate,
+  encodeCrdtUpdate,
+  inspectCrdtUpdate,
+  mergeCrdtUpdates
+} from '@shapeshift-labs/frontier-crdt/update';
+import { createCrdtBranch } from '@shapeshift-labs/frontier-crdt/branch';
+import { createCrdtUndoManager } from '@shapeshift-labs/frontier-crdt/undo';
+```
+
+## Subpath Imports
+
+```ts
+import { mergeCrdtUpdates } from '@shapeshift-labs/frontier-crdt/update';
+import { createCrdtDocument } from '@shapeshift-labs/frontier-crdt/document';
+import { createCrdtStateEngine } from '@shapeshift-labs/frontier-crdt/state';
+import { createCrdtAwareness } from '@shapeshift-labs/frontier-crdt/awareness';
+import { createCrdtBranch } from '@shapeshift-labs/frontier-crdt/branch';
+import { createCrdtUndoManager } from '@shapeshift-labs/frontier-crdt/undo';
+```
+
+## Package Scope
+
+This package is intentionally limited to:
+
+- Native CRDT document creation and document handles.
+- CRDT JSON, map, list, text, counter, binary, tree, XML, and rich-text document operations.
+- CRDT update encode/decode/merge/diff/inspect/filter/obfuscate helpers.
+- Durable versioning, snapshots, checkout/fork helpers, branch wrappers, conflict introspection, awareness, and undo.
+
+It does not expose sync providers, repos, storage adapters, document URLs, local sync networks, model-checking transports, or editor text bindings. Those belong in the higher `@shapeshift-labs/frontier-crdt-sync` package.
+
+## TypeScript
+
+The package ships ESM JavaScript plus `.d.ts` declarations for the root export and public subpaths. The package-local TypeScript source lives in `src/` and compiles directly to `dist/`.
+
+## Validation
+
+```sh
+npm test
+npm run fuzz
+npm run bench
+npm run pack:dry
+```
+
+## Benchmarks
+
+Run the package-local benchmark:
+
+```sh
+npm run bench
+```
+
+Latest local package benchmark on Node v26.1.0, darwin arm64, 3 rounds:
+
+| Fixture | Median | p95 |
+| --- | ---: | ---: |
+| Local text insert transaction | 5.17 us | 6.67 us |
+| Incremental text typing, 100 chars | 189.57 us | 194.68 us |
+| Update inspect metadata | 9.58 us | 10.95 us |
+| Merge duplicate updates | 11.06 us | 12.02 us |
+
+These are Frontier-only package measurements, not competitor comparisons.
 
 ## License
 

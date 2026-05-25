@@ -1,4 +1,5 @@
 node_modules/
 dist/
-*.log
+benchmarks/results/
+*.tgz
 .DS_Store
