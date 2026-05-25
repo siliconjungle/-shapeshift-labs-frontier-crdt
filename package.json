@@ -1,0 +1,45 @@
+{
+  "name": "@shapeshift-labs/frontier-crdt",
+  "version": "0.0.2",
+  "description": "Reserved package name for the future Frontier CRDT document layer.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/siliconjungle/-shapeshift-labs-frontier-crdt.git"
+  },
+  "homepage": "https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt#readme",
+  "bugs": {
+    "url": "https://github.com/siliconjungle/-shapeshift-labs-frontier-crdt/issues"
+  },
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node -e \"import('./index.js').catch((error) => { if (!String(error && error.message).includes('reserved placeholder')) process.exit(1); })\""
+  },
+  "keywords": [
+    "frontier",
+    "crdt",
+    "collaboration",
+    "local-first",
+    "reserved"
+  ]
+}
