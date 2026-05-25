@@ -1,6 +1,6 @@
 {
   "name": "@shapeshift-labs/frontier-crdt",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Native CRDT documents, updates, awareness, branches, conflicts, and undo for Frontier.",
   "type": "module",
   "license": "MIT",
