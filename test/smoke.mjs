@@ -59,6 +59,46 @@ peer.applyUpdate(update.mergeCrdtUpdates([encoded]));
 assert.deepStrictEqual(peer.toJSON(), { title: 'hello', body: 'frontier' });
 assert.deepStrictEqual(peer.applyUpdate(encoded).viewPatch, []);
 
+const richBase = crdt.createCrdtDocument({ actorId: 'pkg-rich-base' });
+richBase.richText('/doc').fromDelta([{ insert: 'hello world' }]);
+const richA = crdt.createCrdtDocument({ actorId: 'pkg-rich-a' });
+const richB = crdt.createCrdtDocument({ actorId: 'pkg-rich-b' });
+richA.applyUpdate(richBase.exportUpdate());
+richB.applyUpdate(richBase.exportUpdate());
+richA.richText('/doc').format(0, 5, { bold: true }, { expand: 'after' });
+richB.richText('/doc').format(6, 5, { italic: true }, { expand: 'after' });
+richA.applyUpdate(richB.exportUpdate(richBase.getStateVector()));
+richB.applyUpdate(richA.exportUpdate(richBase.getStateVector()));
+assert.deepStrictEqual(richA.richText('/doc').toDelta(), [
+  { insert: 'hello', attributes: { bold: true } },
+  { insert: ' ' },
+  { insert: 'world', attributes: { italic: true } }
+]);
+assert.deepStrictEqual(richB.richText('/doc').toDelta(), richA.richText('/doc').toDelta());
+
+const richBoundary = crdt.createCrdtDocument({ actorId: 'pkg-rich-boundary-a' });
+richBoundary.richText('/doc').fromDelta([{ insert: 'hello world' }]);
+richBoundary.richText('/doc').format(0, 5, { bold: true }, { expand: 'after' });
+const richBoundaryPeer = crdt.createCrdtDocument({ actorId: 'pkg-rich-boundary-b' });
+richBoundaryPeer.applyUpdate(richBoundary.exportUpdate());
+richBoundaryPeer.richText('/doc').insert(5, '!');
+richBoundary.applyUpdate(richBoundaryPeer.exportUpdate(richBoundary.getStateVector()));
+assert.deepStrictEqual(richBoundary.richText('/doc').toDelta(), [
+  { insert: 'hello!', attributes: { bold: true } },
+  { insert: ' world' }
+]);
+
+const richLink = crdt.createCrdtDocument({ actorId: 'pkg-rich-link' });
+richLink.richText('/doc').fromDelta([{ insert: 'hello' }]);
+richLink.richText('/doc').format(0, 5, { link: 'https://example.com' }, { expand: 'none' });
+richLink.richText('/doc').insert(5, '!');
+assert.deepStrictEqual(richLink.richText('/doc').toDelta(), [
+  { insert: 'hello', attributes: { link: 'https://example.com' } },
+  { insert: '!' }
+]);
+richLink.richText('/doc').clearFormat(0, 5, ['link']);
+assert.deepStrictEqual(richLink.richText('/doc').toDelta(), [{ insert: 'hello!' }]);
+
 const awarenessA = awarenessOnly.createCrdtAwareness({ actorId: 'pkg-presence-a' });
 const awarenessB = awarenessOnly.createCrdtAwareness({ actorId: 'pkg-presence-b' });
 const presenceUpdate = awarenessA.setLocalState({ name: 'Ada' });

@@ -43,6 +43,8 @@ export type {
   CrdtRichTextDelta,
   CrdtRichTextDeltaOp,
   CrdtRichTextEmbed,
+  CrdtRichTextExpand,
+  CrdtRichTextFormatOptions,
   CrdtRichTextHandle,
   CrdtRichTextSpan,
   CrdtRichTextValue,

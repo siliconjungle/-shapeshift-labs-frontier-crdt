@@ -110,9 +110,21 @@ function consume(value) {
 import { createCrdtDocument } from '../dist/index.js';
 import { inspectCrdtUpdate, mergeCrdtUpdates } from '../dist/crdt-update.js';
 
+const richDeltaFixture = (() => {
+  const doc = makeRichTextDoc();
+  const rich = doc.richText('/doc');
+  rich.format(0, 5, { bold: true }, { expand: 'after' });
+  rich.format(6, 11, { italic: true }, { expand: 'after' });
+  rich.format(17, 25, { link: 'https://frontier.local' }, { expand: 'none' });
+  return doc;
+})();
+
 const rows = [
   runRow('Local text insert transaction', 500, () => { const doc = createCrdtDocument({ actorId: 'bench-a' }); doc.text('/body').insert(0, 'frontier'); sink += doc.toJSON().body.length; }),
   runRow('Incremental text typing, 100 chars', 80, () => { const doc = createCrdtDocument({ actorId: 'bench-type' }); const text = doc.text('/body'); for (let i = 0; i < 100; i++) text.insert(i, 'x'); sink += doc.toJSON().body.length; }),
+  runRow('Rich text anchored mark format', 500, () => { const doc = makeRichTextDoc(); doc.richText('/doc').format(0, 5, { bold: true }, { expand: 'after' }); sink += doc.richText('/doc').toDelta().length; }),
+  runRow('Rich text boundary insert resolve', 300, () => { const doc = makeRichTextDoc(); const rich = doc.richText('/doc'); rich.format(0, 5, { bold: true }, { expand: 'after' }); rich.insert(5, '!'); sink += rich.toDelta().length; }),
+  runRow('Rich text Delta export, 6 spans', 1000, () => { sink += richDeltaFixture.richText('/doc').toDelta().length; }),
   runRow('Update inspect metadata', 1000, () => { const update = makeUpdate(); sink += inspectCrdtUpdate(update).opCount; }),
   runRow('Merge duplicate updates', 1000, () => { const update = makeUpdate(); sink += mergeCrdtUpdates([update, update]).byteLength; }),
   runRetainedRow('Retained heap: 100-char text doc', 40, () => makeTextDoc(100)),
@@ -123,3 +135,4 @@ finish('@shapeshift-labs/frontier-crdt', rows);
 function makeUpdate() { const doc = createCrdtDocument({ actorId: 'bench-update' }); doc.set('/title', 'hello'); doc.text('/body').insert(0, 'frontier'); return doc.exportUpdate(); }
 function makeBulkUpdate() { return makeTextDoc(100).exportUpdate(); }
 function makeTextDoc(length) { const doc = createCrdtDocument({ actorId: 'bench-text-doc' }); const text = doc.text('/body'); for (let i = 0; i < length; i++) text.insert(i, 'x'); return doc; }
+function makeRichTextDoc() { const doc = createCrdtDocument({ actorId: 'bench-rich-' + (++sink) }); doc.richText('/doc').fromDelta([{ insert: 'hello world from frontier rich text' }]); return doc; }

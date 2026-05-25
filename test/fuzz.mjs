@@ -54,7 +54,7 @@ function runCase(caseIndex, rng) {
 
 function applyRandomEdit(doc, rng, step) {
   const view = doc.toJSON();
-  const choice = randomInt(rng, 8);
+  const choice = randomInt(rng, 12);
   if (choice === 0) {
     doc.set('/meta/version', step);
   } else if (choice === 1) {
@@ -76,10 +76,41 @@ function applyRandomEdit(doc, rng, step) {
     const items = Array.isArray(view.items) ? view.items : [];
     if (items.length === 0) doc.list('/items').insert(0, { id: 'seed-' + step });
     else doc.list('/items').delete(randomInt(rng, items.length), 1);
-  } else {
+  } else if (choice === 7) {
     const bytes = new Uint8Array([step & 255, randomInt(rng, 256), randomInt(rng, 256)]);
     doc.binary('/blob').set(bytes);
+  } else if (choice === 8) {
+    const rich = readRichText(view);
+    doc.richText('/rich').insert(randomInt(rng, rich.length + 1), String.fromCharCode(97 + randomInt(rng, 26)));
+  } else if (choice === 9) {
+    const rich = readRichText(view);
+    if (rich.length === 0) doc.richText('/rich').insert(0, 'r');
+    else doc.richText('/rich').delete(randomInt(rng, rich.length), 1);
+  } else if (choice === 10) {
+    const rich = readRichText(view);
+    if (rich.length === 0) {
+      doc.richText('/rich').insert(0, 'rich');
+    } else {
+      const start = randomInt(rng, rich.length);
+      const length = 1 + randomInt(rng, rich.length - start);
+      const key = randomInt(rng, 3) === 0 ? 'link' : randomInt(rng, 2) === 0 ? 'bold' : 'italic';
+      const value = key === 'link' ? 'https://example.com/' + randomInt(rng, 8) : true;
+      doc.richText('/rich').format(start, length, { [key]: value }, { expand: key === 'link' ? 'none' : 'after' });
+    }
+  } else {
+    const rich = readRichText(view);
+    if (rich.length !== 0) {
+      const start = randomInt(rng, rich.length);
+      const length = 1 + randomInt(rng, rich.length - start);
+      const key = randomInt(rng, 2) === 0 ? 'bold' : 'italic';
+      doc.richText('/rich').clearFormat(start, length, [key]);
+    }
   }
+}
+
+function readRichText(view) {
+  const rich = view && typeof view === 'object' && view.rich && typeof view.rich === 'object' ? view.rich : undefined;
+  return rich && typeof rich.text === 'string' ? rich.text : '';
 }
 
 function randomInt(rng, max) {

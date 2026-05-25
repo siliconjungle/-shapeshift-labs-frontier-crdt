@@ -308,7 +308,7 @@ class FrontierCrdtStateEngine implements CrdtStateEngine {
       insert: (index, text, attributes) => this.publish(handle.insert(index, text, attributes)),
       insertEmbed: (index, value, attributes) => this.publish(handle.insertEmbed(index, value, attributes)),
       delete: (index, count) => this.publish(handle.delete(index, count)),
-      format: (index, length, attributes) => this.publish(handle.format(index, length, attributes)),
+      format: (index, length, attributes, options) => this.publish(handle.format(index, length, attributes, options)),
       clearFormat: (index, length, keys) => this.publish(handle.clearFormat(index, length, keys)),
       updateEmbed: (index, value, attributes) => this.publish(handle.updateEmbed(index, value, attributes)),
       formatBlock: (index, attributes) => this.publish(handle.formatBlock(index, attributes)),

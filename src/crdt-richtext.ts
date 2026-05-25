@@ -8,6 +8,8 @@ import type {
   CrdtRichTextDelta,
   CrdtRichTextDeltaOp,
   CrdtRichTextEmbed,
+  CrdtRichTextExpand,
+  CrdtRichTextFormatOptions,
   CrdtRichTextHandle,
   CrdtRichTextSpan,
   CrdtRichTextValue,
@@ -24,8 +26,9 @@ import type {
 } from './types.js';
 
 const EMBED_CHAR = '\ufffc';
+const NON_EXPANDING_MARK_KEYS = new Set(['link', 'href', 'comment', 'mention']);
 
-type RichTextDoc = Pick<CrdtDocument, 'toJSON' | 'change' | 'createCursor' | 'resolveCursor' | 'createSelection' | 'resolveSelection'>;
+type RichTextDoc = Pick<CrdtDocument, 'actorId' | 'toJSON' | 'getStateVector' | 'change' | 'createCursor' | 'resolveCursor' | 'createSelection' | 'resolveSelection'>;
 type RichTextTx = Pick<CrdtTransaction, 'set' | 'list' | 'text'>;
 
 export function createCrdtRichTextHandle(doc: RichTextDoc, path: JsonPath): CrdtRichTextHandle {
@@ -39,6 +42,10 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
   ) {}
 
   value(): CrdtRichTextValue {
+    return resolveRichTextValue(this.doc, this.path, this.rawValue());
+  }
+
+  private rawValue(): CrdtRichTextValue {
     return readRichTextAt(this.doc.toJSON(), this.path);
   }
 
@@ -92,7 +99,7 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
 
   fromDelta(delta: readonly CrdtRichTextDeltaOp[]): CrdtCommitResult {
     const next = richTextFromDelta(delta);
-    const before = this.value();
+    const before = this.rawValue();
     const plan: RichTextPlan = {
       textOps: [{ index: 0, deleteCount: codePointLength(before.text), insert: next.text }],
       spans: next.spans || [],
@@ -105,8 +112,8 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
   }
 
   applyDelta(delta: readonly CrdtRichTextDeltaOp[]): CrdtCommitResult {
-    const before = this.value();
-    const plan = planRichTextDelta(before, delta);
+    const before = this.rawValue();
+    const plan = planRichTextDelta(resolveRichTextValue(this.doc, this.path, before), delta);
     return this.doc.change((tx) => {
       this.applyPlan(tx, before, plan);
     });
@@ -124,35 +131,45 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
     return this.applyDelta([{ retain: index }, { delete: count }]);
   }
 
-  format(index: number, length: number, attributes: JsonObject): CrdtCommitResult {
-    return this.applyDelta([{ retain: index }, { retain: length, attributes }]);
+  format(index: number, length: number, attributes: JsonObject, options?: CrdtRichTextFormatOptions): CrdtCommitResult {
+    if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('rich text format index must be a non-negative safe integer');
+    if (!Number.isSafeInteger(length) || length < 0) throw new RangeError('rich text format length must be a non-negative safe integer');
+    const before = this.rawValue();
+    const visible = resolveRichTextValue(this.doc, this.path, before);
+    const textLength = codePointLength(visible.text);
+    const start = Math.min(index, textLength);
+    const end = Math.min(start + length, textLength);
+    if (end <= start || Object.keys(attributes).length === 0) return this.doc.change(() => {});
+    const span = createAnchoredSpan(this.doc, this.path, start, end, attributes, options, 0);
+    return this.doc.change((tx) => {
+      ensureRichTextRoot(tx, this.path, before);
+      appendRichTextSidecarList(tx, this.path.concat('spans'), before.spans || [], [span]);
+    });
   }
 
   clearFormat(index: number, length: number, keys?: readonly string[]): CrdtCommitResult {
     if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('rich text clearFormat index must be a non-negative safe integer');
     if (!Number.isSafeInteger(length) || length < 0) throw new RangeError('rich text clearFormat length must be a non-negative safe integer');
-    const before = this.value();
-    const textLength = codePointLength(before.text);
+    const before = this.rawValue();
+    const visible = resolveRichTextValue(this.doc, this.path, before);
+    const textLength = codePointLength(visible.text);
     const start = Math.min(index, textLength);
     const end = Math.min(start + length, textLength);
-    const spans = cloneSpans(before.spans);
-    const remove = keys === undefined ? collectAttributeKeys(spans, start, end) : keys.slice();
-    if (remove.length !== 0) removeFormatAttributes(spans, start, end, remove);
-    const plan: RichTextPlan = {
-      textOps: [],
-      spans: compactSpans(spans, textLength),
-      embeds: cloneEmbeds(before.embeds),
-      blocks: compactBlocks(cloneBlocks(before.blocks), textLength)
-    };
+    const remove = keys === undefined ? collectAttributeKeys(visible.spans || [], start, end) : keys.slice();
+    if (end <= start || remove.length === 0) return this.doc.change(() => {});
+    const attributes = keysToNullAttributes(remove);
+    const span = createAnchoredSpan(this.doc, this.path, start, end, attributes, { expand: 'none' }, 0);
     return this.doc.change((tx) => {
-      this.applyPlan(tx, before, plan);
+      ensureRichTextRoot(tx, this.path, before);
+      if (remove.length !== 0) appendRichTextSidecarList(tx, this.path.concat('spans'), before.spans || [], [span]);
     });
   }
 
   updateEmbed(index: number, value: JsonObject, attributes?: JsonObject): CrdtCommitResult {
     if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('rich text embed index must be a non-negative safe integer');
-    const before = this.value();
-    const chars = Array.from(before.text);
+    const before = this.rawValue();
+    const visible = resolveRichTextValue(this.doc, this.path, before);
+    const chars = Array.from(visible.text);
     if (index >= chars.length || chars[index] !== EMBED_CHAR) throw new TypeError('rich text embed index must point to an embed');
     const embeds = cloneEmbeds(before.embeds);
     let updated = false;
@@ -172,9 +189,9 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
     const textLength = chars.length;
     const plan: RichTextPlan = {
       textOps: [],
-      spans: cloneSpans(before.spans),
+      spans: undefined,
       embeds: compactEmbeds(embeds, textLength),
-      blocks: compactBlocks(cloneBlocks(before.blocks), textLength)
+      blocks: undefined
     };
     return this.doc.change((tx) => {
       this.applyPlan(tx, before, plan);
@@ -183,13 +200,14 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
 
   formatBlock(index: number, attributes: JsonObject): CrdtCommitResult {
     if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('rich text block index must be a non-negative safe integer');
-    const before = this.value();
-    const bounded = Math.min(index, codePointLength(before.text));
+    const before = this.rawValue();
+    const visible = resolveRichTextValue(this.doc, this.path, before);
+    const bounded = Math.min(index, codePointLength(visible.text));
     const plan: RichTextPlan = {
       textOps: [],
-      spans: cloneSpans(before.spans),
-      embeds: cloneEmbeds(before.embeds),
-      blocks: compactBlocks(upsertBlock(cloneBlocks(before.blocks), bounded, attributes), codePointLength(before.text))
+      spans: undefined,
+      embeds: undefined,
+      blocks: compactBlocks(upsertBlock(cloneBlocks(visible.blocks), bounded, attributes), codePointLength(visible.text))
     };
     return this.doc.change((tx) => {
       this.applyPlan(tx, before, plan);
@@ -198,13 +216,14 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
 
   clearBlock(index: number): CrdtCommitResult {
     if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('rich text block index must be a non-negative safe integer');
-    const before = this.value();
-    const bounded = Math.min(index, codePointLength(before.text));
+    const before = this.rawValue();
+    const visible = resolveRichTextValue(this.doc, this.path, before);
+    const bounded = Math.min(index, codePointLength(visible.text));
     const plan: RichTextPlan = {
       textOps: [],
-      spans: cloneSpans(before.spans),
-      embeds: cloneEmbeds(before.embeds),
-      blocks: compactBlocks(removeBlock(cloneBlocks(before.blocks), bounded), codePointLength(before.text))
+      spans: undefined,
+      embeds: undefined,
+      blocks: compactBlocks(removeBlock(cloneBlocks(visible.blocks), bounded), codePointLength(visible.text))
     };
     return this.doc.change((tx) => {
       this.applyPlan(tx, before, plan);
@@ -220,9 +239,9 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
       if (op.deleteCount === 0 && op.insert.length === 0) continue;
       tx.text(textPath).splice(op.index, op.deleteCount, op.insert);
     }
-    replaceRichTextSidecarList(tx, this.path.concat('spans'), before.spans || [], plan.spans);
-    replaceRichTextSidecarList(tx, this.path.concat('embeds'), before.embeds || [], plan.embeds);
-    if (before.blocks !== undefined || plan.blocks.length !== 0) {
+    if (plan.spans !== undefined) replaceRichTextSidecarList(tx, this.path.concat('spans'), before.spans || [], plan.spans);
+    if (plan.embeds !== undefined) replaceRichTextSidecarList(tx, this.path.concat('embeds'), before.embeds || [], plan.embeds);
+    if (plan.blocks !== undefined && (before.blocks !== undefined || plan.blocks.length !== 0)) {
       replaceRichTextSidecarList(tx, this.path.concat('blocks'), before.blocks || [], plan.blocks);
     }
   }
@@ -230,9 +249,9 @@ class FrontierCrdtRichTextHandle implements CrdtRichTextHandle {
 
 type RichTextPlan = {
   textOps: Array<{ index: number; deleteCount: number; insert: string }>;
-  spans: CrdtRichTextSpan[];
-  embeds: CrdtRichTextEmbed[];
-  blocks: CrdtRichTextBlock[];
+  spans?: CrdtRichTextSpan[];
+  embeds?: CrdtRichTextEmbed[];
+  blocks?: CrdtRichTextBlock[];
 };
 
 export function normalizeCrdtRichTextPath(path: WatchPath): JsonPath {
@@ -261,6 +280,40 @@ function normalizeRichTextValue(value: JsonValue | undefined): CrdtRichTextValue
   };
 }
 
+function resolveRichTextValue(doc: RichTextDoc, path: JsonPath, value: CrdtRichTextValue): CrdtRichTextValue {
+  const textLength = codePointLength(value.text);
+  const spans = compactSpans(resolveAnchoredSpans(doc, value.spans), textLength);
+  return {
+    text: value.text,
+    spans: materializeVisibleSpans(spans, textLength),
+    embeds: compactEmbeds(cloneEmbeds(value.embeds), textLength),
+    blocks: compactBlocks(cloneBlocks(value.blocks), textLength)
+  };
+}
+
+function resolveAnchoredSpans(doc: RichTextDoc, spans: CrdtRichTextSpan[] | undefined): CrdtRichTextSpan[] {
+  if (spans === undefined || spans.length === 0) return [];
+  const resolved = new Array<CrdtRichTextSpan>(spans.length);
+  for (let i = 0, length = spans.length; i < length; i++) {
+    const span = spans[i];
+    let start = span.start;
+    let end = span.end;
+    if (span.range !== undefined) {
+      const selection = doc.resolveSelection(span.range);
+      if (selection.found) {
+        start = Math.min(selection.anchor, selection.focus);
+        end = Math.max(selection.anchor, selection.focus);
+      }
+    }
+    const out: CrdtRichTextSpan = { start, end, attributes: cloneJson(span.attributes) };
+    if (span.id !== undefined) out.id = span.id;
+    if (span.range !== undefined) out.range = cloneRichTextSelection(span.range);
+    if (span.expand !== undefined) out.expand = span.expand;
+    resolved[i] = out;
+  }
+  return resolved;
+}
+
 function ensureRichTextRoot(tx: RichTextTx, path: JsonPath, before: CrdtRichTextValue): void {
   if (
     before.text.length !== 0 ||
@@ -283,6 +336,15 @@ function replaceRichTextSidecarList(
   if (after.length !== 0) tx.list(path).insert(0, after.slice() as unknown as JsonValue[]);
 }
 
+function appendRichTextSidecarList(
+  tx: RichTextTx,
+  path: JsonPath,
+  before: readonly unknown[],
+  entries: readonly unknown[]
+): void {
+  if (entries.length !== 0) tx.list(path).insert(before.length, entries.slice() as unknown as JsonValue[]);
+}
+
 function planRichTextDelta(before: CrdtRichTextValue, delta: readonly CrdtRichTextDeltaOp[]): RichTextPlan {
   let index = 0;
   let length = codePointLength(before.text);
@@ -290,6 +352,9 @@ function planRichTextDelta(before: CrdtRichTextValue, delta: readonly CrdtRichTe
   const embeds = cloneEmbeds(before.embeds);
   const blocks = cloneBlocks(before.blocks);
   const textOps: Array<{ index: number; deleteCount: number; insert: string }> = [];
+  let spansChanged = false;
+  let embedsChanged = false;
+  let blocksChanged = false;
 
   for (let i = 0, opCount = delta.length; i < opCount; i++) {
     const op = delta[i];
@@ -297,13 +362,17 @@ function planRichTextDelta(before: CrdtRichTextValue, delta: readonly CrdtRichTe
       const retain = normalizePositiveCount(op.retain, 'retain');
       if (op.attributes !== undefined && retain !== 0) {
         applyFormatSpan(spans, index, Math.min(index + retain, length), op.attributes);
+        spansChanged = true;
       }
       index = Math.min(index + retain, length);
     } else if ('delete' in op) {
       const count = Math.min(normalizePositiveCount(op.delete, 'delete'), length - index);
       if (count === 0) continue;
       textOps[textOps.length] = { index, deleteCount: count, insert: '' };
-      deleteRangeFromSidecars(spans, embeds, blocks, index, count);
+      const changed = deleteRangeFromSidecars(spans, embeds, blocks, index, count);
+      spansChanged ||= changed.spans;
+      embedsChanged ||= changed.embeds;
+      blocksChanged ||= changed.blocks;
       length -= count;
     } else if ('insert' in op) {
       const attributes = op.attributes;
@@ -311,14 +380,23 @@ function planRichTextDelta(before: CrdtRichTextValue, delta: readonly CrdtRichTe
         if (op.insert.length === 0) continue;
         const count = codePointLength(op.insert);
         textOps[textOps.length] = { index, deleteCount: 0, insert: op.insert };
-        shiftSidecarsForInsert(spans, embeds, blocks, index, count);
-        if (attributes !== undefined) applyFormatSpan(spans, index, index + count, attributes);
+        const changed = shiftSidecarsForInsert(spans, embeds, blocks, index, count);
+        spansChanged ||= changed.spans;
+        embedsChanged ||= changed.embeds;
+        blocksChanged ||= changed.blocks;
+        if (attributes !== undefined) {
+          applyFormatSpan(spans, index, index + count, attributes);
+          spansChanged = true;
+        }
         index += count;
         length += count;
       } else {
         const value = cloneJson(op.insert);
         textOps[textOps.length] = { index, deleteCount: 0, insert: EMBED_CHAR };
-        shiftSidecarsForInsert(spans, embeds, blocks, index, 1);
+        const changed = shiftSidecarsForInsert(spans, embeds, blocks, index, 1);
+        spansChanged ||= changed.spans;
+        embedsChanged = true;
+        blocksChanged ||= changed.blocks;
         embeds[embeds.length] = attributes === undefined
           ? { index, value }
           : { index, value, attributes: cloneJson(attributes) };
@@ -330,9 +408,9 @@ function planRichTextDelta(before: CrdtRichTextValue, delta: readonly CrdtRichTe
 
   return {
     textOps,
-    spans: compactSpans(spans, length),
-    embeds: compactEmbeds(embeds, length),
-    blocks: compactBlocks(blocks, length)
+    spans: spansChanged ? compactSpans(spans, length) : undefined,
+    embeds: embedsChanged ? compactEmbeds(embeds, length) : undefined,
+    blocks: blocksChanged ? compactBlocks(blocks, length) : undefined
   };
 }
 
@@ -343,8 +421,8 @@ function richTextFromDelta(delta: readonly CrdtRichTextDeltaOp[]): CrdtRichTextV
   for (let i = 0, length = plan.textOps.length; i < length; i++) text += plan.textOps[i].insert;
   return {
     text,
-    spans: plan.spans,
-    embeds: plan.embeds
+    spans: plan.spans || [],
+    embeds: plan.embeds || []
   };
 }
 
@@ -389,6 +467,58 @@ function flushDeltaText(delta: CrdtRichTextDelta, text: string, attributes: Json
   delta[delta.length] = attributes === undefined ? { insert: text } : { insert: text, attributes };
 }
 
+function createAnchoredSpan(
+  doc: RichTextDoc,
+  path: JsonPath,
+  start: number,
+  end: number,
+  attributes: JsonObject,
+  options: CrdtRichTextFormatOptions | undefined,
+  salt: number
+): CrdtRichTextSpan {
+  const expand = normalizeRichTextExpand(options?.expand, attributes);
+  const selection = createExpandedSelection(doc, path, start, end, expand);
+  const span: CrdtRichTextSpan = {
+    id: options && options.id !== undefined ? options.id : nextRichTextSpanId(doc, salt),
+    start,
+    end,
+    attributes: cloneJson(attributes),
+    range: selection,
+    expand
+  };
+  return span;
+}
+
+function createExpandedSelection(
+  doc: RichTextDoc,
+  path: JsonPath,
+  start: number,
+  end: number,
+  expand: CrdtRichTextExpand
+): CrdtTextSelection {
+  const textPath = path.concat('text');
+  if (expand === 'both') return doc.createSelection(textPath, start, end, { anchorAssoc: -1, focusAssoc: 1 });
+  if (expand === 'before') return doc.createSelection(textPath, start, end, { anchorAssoc: -1, focusAssoc: -1 });
+  if (expand === 'none') return doc.createSelection(textPath, start, end, { anchorAssoc: 1, focusAssoc: -1 });
+  return doc.createSelection(textPath, start, end, { anchorAssoc: 1, focusAssoc: 1 });
+}
+
+function normalizeRichTextExpand(value: CrdtRichTextExpand | undefined, attributes: JsonObject): CrdtRichTextExpand {
+  if (value !== undefined) {
+    if (value !== 'after' && value !== 'before' && value !== 'none' && value !== 'both') throw new TypeError('invalid rich text expand policy');
+    return value;
+  }
+  const keys = Object.keys(attributes);
+  if (keys.length !== 0 && keys.every((key) => NON_EXPANDING_MARK_KEYS.has(key))) return 'none';
+  return 'after';
+}
+
+function nextRichTextSpanId(doc: RichTextDoc, salt: number): string {
+  const actor = doc.actorId;
+  const seq = (doc.getStateVector()[actor] || 0) + 1;
+  return actor + ':' + seq + (salt === 0 ? '' : '/' + salt);
+}
+
 function applyFormatSpan(spans: CrdtRichTextSpan[], start: number, end: number, attributes: JsonObject | null): void {
   if (end <= start) return;
   if (attributes === null) return;
@@ -403,6 +533,12 @@ function applyFormatSpan(spans: CrdtRichTextSpan[], start: number, end: number, 
   }
   if (remove.length !== 0) removeFormatAttributes(spans, start, end, remove);
   if (Object.keys(add).length !== 0) spans[spans.length] = { start, end, attributes: add };
+}
+
+function keysToNullAttributes(keys: readonly string[]): JsonObject {
+  const attributes: JsonObject = {};
+  for (let i = 0, length = keys.length; i < length; i++) attributes[keys[i]] = null;
+  return attributes;
 }
 
 function removeFormatAttributes(spans: CrdtRichTextSpan[], start: number, end: number, keys: readonly string[]): void {
@@ -469,22 +605,35 @@ function shiftSidecarsForInsert(
   blocks: CrdtRichTextBlock[],
   index: number,
   count: number
-): void {
+): { spans: boolean; embeds: boolean; blocks: boolean } {
+  let spansChanged = false;
+  let embedsChanged = false;
+  let blocksChanged = false;
   for (let i = 0, length = spans.length; i < length; i++) {
     const span = spans[i];
+    if (span.range !== undefined) continue;
     if (span.start >= index) {
       span.start += count;
       span.end += count;
+      spansChanged = true;
     } else if (span.end > index) {
       span.end += count;
+      spansChanged = true;
     }
   }
   for (let i = 0, length = embeds.length; i < length; i++) {
-    if (embeds[i].index >= index) embeds[i].index += count;
+    if (embeds[i].index >= index) {
+      embeds[i].index += count;
+      embedsChanged = true;
+    }
   }
   for (let i = 0, length = blocks.length; i < length; i++) {
-    if (blocks[i].index >= index) blocks[i].index += count;
+    if (blocks[i].index >= index) {
+      blocks[i].index += count;
+      blocksChanged = true;
+    }
   }
+  return { spans: spansChanged, embeds: embedsChanged, blocks: blocksChanged };
 }
 
 function deleteRangeFromSidecars(
@@ -493,48 +642,123 @@ function deleteRangeFromSidecars(
   blocks: CrdtRichTextBlock[],
   index: number,
   count: number
-): void {
+): { spans: boolean; embeds: boolean; blocks: boolean } {
   const end = index + count;
+  let spansChanged = false;
+  let embedsChanged = false;
+  let blocksChanged = false;
   for (let i = spans.length - 1; i >= 0; i--) {
     const span = spans[i];
+    if (span.range !== undefined) continue;
     if (span.end <= index) continue;
     if (span.start >= end) {
       span.start -= count;
       span.end -= count;
+      spansChanged = true;
       continue;
     }
     if (span.start < index && span.end > end) {
       span.end -= count;
+      spansChanged = true;
     } else if (span.start < index) {
       span.end = index;
+      spansChanged = true;
     } else if (span.end > end) {
       span.start = index;
       span.end -= count;
+      spansChanged = true;
     } else {
       spans.splice(i, 1);
+      spansChanged = true;
     }
   }
   for (let i = embeds.length - 1; i >= 0; i--) {
     const embed = embeds[i];
-    if (embed.index >= end) embed.index -= count;
-    else if (embed.index >= index) embeds.splice(i, 1);
+    if (embed.index >= end) {
+      embed.index -= count;
+      embedsChanged = true;
+    } else if (embed.index >= index) {
+      embeds.splice(i, 1);
+      embedsChanged = true;
+    }
   }
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i];
-    if (block.index >= end) block.index -= count;
-    else if (block.index >= index) blocks.splice(i, 1);
+    if (block.index >= end) {
+      block.index -= count;
+      blocksChanged = true;
+    } else if (block.index >= index) {
+      blocks.splice(i, 1);
+      blocksChanged = true;
+    }
   }
+  return { spans: spansChanged, embeds: embedsChanged, blocks: blocksChanged };
+}
+
+function materializeVisibleSpans(spans: readonly CrdtRichTextSpan[], length: number): CrdtRichTextSpan[] {
+  if (spans.length === 0 || length === 0) return [];
+  const out: CrdtRichTextSpan[] = [];
+  let currentKey = '';
+  let currentAttrs: JsonObject | undefined;
+  let currentStart = 0;
+  for (let i = 0; i < length; i++) {
+    const attrs = attributesAt(spans, i);
+    const key = attrs === undefined ? '' : JSON.stringify(attrs);
+    if (i !== 0 && key === currentKey) continue;
+    if (currentAttrs !== undefined && currentStart < i) {
+      out[out.length] = { start: currentStart, end: i, attributes: currentAttrs };
+    }
+    currentStart = i;
+    currentKey = key;
+    currentAttrs = attrs;
+  }
+  if (currentAttrs !== undefined && currentStart < length) {
+    out[out.length] = { start: currentStart, end: length, attributes: currentAttrs };
+  }
+  return out;
 }
 
 function attributesAt(spans: readonly CrdtRichTextSpan[], index: number): JsonObject | undefined {
-  let out: JsonObject | undefined;
+  let active: CrdtRichTextSpan[] | undefined;
   for (let i = 0, length = spans.length; i < length; i++) {
     const span = spans[i];
     if (index < span.start || index >= span.end) continue;
-    if (out === undefined) out = {};
-    Object.assign(out, span.attributes);
+    if (active === undefined) active = [];
+    active[active.length] = span;
   }
+  if (active === undefined) return undefined;
+  active.sort(compareRichTextSpanPriority);
+  const out: JsonObject = {};
+  for (let i = 0, length = active.length; i < length; i++) {
+    const span = active[i];
+    const keys = Object.keys(span.attributes);
+    for (let j = 0, keyCount = keys.length; j < keyCount; j++) {
+      const key = keys[j];
+      const value = span.attributes[key];
+      if (value === null) delete out[key];
+      else out[key] = cloneJson(value);
+    }
+  }
+  if (Object.keys(out).length === 0) return undefined;
   return out;
+}
+
+function compareRichTextSpanPriority(left: CrdtRichTextSpan, right: CrdtRichTextSpan): number {
+  const leftClock = parseRichTextSpanId(left.id);
+  const rightClock = parseRichTextSpanId(right.id);
+  if (leftClock.seq !== rightClock.seq) return leftClock.seq - rightClock.seq;
+  if (leftClock.actor !== rightClock.actor) return leftClock.actor < rightClock.actor ? -1 : 1;
+  return compareRichTextSpans(left, right);
+}
+
+function parseRichTextSpanId(id: string | undefined): { actor: string; seq: number } {
+  if (id === undefined) return { actor: '', seq: 0 };
+  const colon = id.lastIndexOf(':');
+  if (colon === -1) return { actor: id, seq: 0 };
+  let end = id.indexOf('/', colon + 1);
+  if (end === -1) end = id.length;
+  const seq = Number(id.slice(colon + 1, end));
+  return { actor: id.slice(0, colon), seq: Number.isSafeInteger(seq) && seq >= 0 ? seq : 0 };
 }
 
 function normalizeSpans(value: JsonValue | undefined): CrdtRichTextSpan[] {
@@ -546,11 +770,16 @@ function normalizeSpans(value: JsonValue | undefined): CrdtRichTextSpan[] {
     const span = item as JsonObject;
     if (!Number.isSafeInteger(span.start) || !Number.isSafeInteger(span.end) || span.end <= span.start) continue;
     if (span.attributes === null || typeof span.attributes !== 'object' || Array.isArray(span.attributes)) continue;
-    spans[spans.length] = {
+    const entry: CrdtRichTextSpan = {
       start: span.start as number,
       end: span.end as number,
       attributes: cloneJson(span.attributes as JsonObject)
     };
+    if (typeof span.id === 'string' && span.id.length !== 0) entry.id = span.id;
+    const expand = span.expand;
+    if (expand === 'after' || expand === 'before' || expand === 'none' || expand === 'both') entry.expand = expand;
+    if (isRichTextSelection(span.range)) entry.range = cloneRichTextSelection(span.range);
+    spans[spans.length] = entry;
   }
   return spans;
 }
@@ -597,7 +826,15 @@ function normalizeBlocks(value: JsonValue | undefined): CrdtRichTextValue['block
 }
 
 function cloneSpans(value: CrdtRichTextSpan[] | undefined): CrdtRichTextSpan[] {
-  return value === undefined ? [] : value.map((span) => ({ start: span.start, end: span.end, attributes: cloneJson(span.attributes) }));
+  return value === undefined
+    ? []
+    : value.map((span) => {
+        const out: CrdtRichTextSpan = { start: span.start, end: span.end, attributes: cloneJson(span.attributes) };
+        if (span.id !== undefined) out.id = span.id;
+        if (span.range !== undefined) out.range = cloneRichTextSelection(span.range);
+        if (span.expand !== undefined) out.expand = span.expand;
+        return out;
+      });
 }
 
 function cloneEmbeds(value: CrdtRichTextEmbed[] | undefined): CrdtRichTextEmbed[] {
@@ -626,7 +863,11 @@ function compactSpans(spans: CrdtRichTextSpan[], length: number): CrdtRichTextSp
     const start = Math.max(0, Math.min(length, span.start));
     const end = Math.max(start, Math.min(length, span.end));
     if (end > start && Object.keys(span.attributes).length !== 0) {
-      out[out.length] = { start, end, attributes: cloneJson(span.attributes) };
+      const entry: CrdtRichTextSpan = { start, end, attributes: cloneJson(span.attributes) };
+      if (span.id !== undefined) entry.id = span.id;
+      if (span.range !== undefined) entry.range = cloneRichTextSelection(span.range);
+      if (span.expand !== undefined) entry.expand = span.expand;
+      out[out.length] = entry;
     }
   }
   out.sort(compareRichTextSpans);
@@ -683,6 +924,44 @@ function removeBlock(blocks: CrdtRichTextBlock[], index: number): CrdtRichTextBl
     if (blocks[i].index === index) blocks.splice(i, 1);
   }
   return blocks;
+}
+
+function isRichTextSelection(value: unknown): value is CrdtTextSelection {
+  if (value === null || typeof value !== 'object') return false;
+  const selection = value as Partial<CrdtTextSelection>;
+  return selection.type === 'text-selection' &&
+    isRichTextCursor(selection.anchor) &&
+    isRichTextCursor(selection.focus);
+}
+
+function isRichTextCursor(value: unknown): value is CrdtTextCursor {
+  if (value === null || typeof value !== 'object') return false;
+  const cursor = value as Partial<CrdtTextCursor>;
+  return cursor.type === 'text' &&
+    Array.isArray(cursor.path) &&
+    (cursor.anchor === null || typeof cursor.anchor === 'string') &&
+    (cursor.side === 'start' || cursor.side === 'end' || cursor.side === 'before' || cursor.side === 'after') &&
+    typeof cursor.assoc === 'number' &&
+    Number.isSafeInteger(cursor.index);
+}
+
+function cloneRichTextSelection(selection: CrdtTextSelection): CrdtTextSelection {
+  return {
+    type: 'text-selection',
+    anchor: cloneRichTextCursor(selection.anchor),
+    focus: cloneRichTextCursor(selection.focus)
+  };
+}
+
+function cloneRichTextCursor(cursor: CrdtTextCursor): CrdtTextCursor {
+  return {
+    type: 'text',
+    path: cursor.path.slice(),
+    anchor: cursor.anchor,
+    side: cursor.side,
+    assoc: cursor.assoc,
+    index: cursor.index
+  };
 }
 
 function normalizePositiveCount(value: number, name: string): number {

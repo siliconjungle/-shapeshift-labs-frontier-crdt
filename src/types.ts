@@ -766,9 +766,29 @@ export interface CrdtTextHandle {
 }
 
 export interface CrdtRichTextSpan {
+  /** Stable mark identifier used for deterministic same-key conflict ordering. */
+  id?: string;
   start: number;
   end: number;
   attributes: JsonObject;
+  /** Stable CRDT text range. When present it is resolved before materializing spans. */
+  range?: CrdtTextSelection;
+  /** How inserts at the mark boundaries inherit this mark. Defaults to `after`. */
+  expand?: CrdtRichTextExpand;
+}
+
+export type CrdtRichTextExpand = 'after' | 'before' | 'none' | 'both';
+
+export interface CrdtRichTextFormatOptions {
+  /**
+   * Mark boundary expansion policy, following the rich-text convention used by
+   * Loro/Peritext-style text CRDTs. `after` makes bold-like marks grow at the
+   * end boundary, `none` is useful for links/comments, and `both`/`before`
+   * are available for editor-specific policies.
+   */
+  expand?: CrdtRichTextExpand;
+  /** Optional stable ID for deterministic tests or editor-owned mark identity. */
+  id?: string;
 }
 
 export interface CrdtRichTextEmbed {
@@ -846,7 +866,7 @@ export interface CrdtRichTextHandle {
   delete(index: number, count?: number): CrdtCommitResult;
 
   /** Add formatting attributes to a visible range. */
-  format(index: number, length: number, attributes: JsonObject): CrdtCommitResult;
+  format(index: number, length: number, attributes: JsonObject, options?: CrdtRichTextFormatOptions): CrdtCommitResult;
 
   /** Remove formatting attributes from a visible range. Omit keys to remove all active marks there. */
   clearFormat(index: number, length: number, keys?: readonly string[]): CrdtCommitResult;

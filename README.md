@@ -53,6 +53,31 @@ bob.applyUpdate(update);
 console.log(bob.toJSON());
 ```
 
+## Rich Text
+
+Frontier rich text is backed by the CRDT text container plus replicated mark/embed/block sidecars. Inline marks now use stable text selections, so formatting ranges move with CRDT text edits instead of staying as plain numeric offsets.
+
+The mark model follows the practical Peritext/Loro direction:
+
+- Marks are stored as CRDT data with stable range anchors.
+- Marks support explicit boundary expansion: `after`, `before`, `none`, or `both`.
+- Bold/italic-style marks default to `after`; link/comment-style marks default to `none`.
+- `toDelta()` exports a Quill Delta-shaped view for editor bindings.
+- Same-key overlaps are resolved deterministically; non-conflicting keys compose.
+
+```ts
+const doc = createCrdtDocument({ actorId: 'writer-a' });
+const rich = doc.richText('/article/body');
+
+rich.fromDelta([{ insert: 'hello world' }]);
+rich.format(0, 5, { bold: true }, { expand: 'after' });
+rich.format(6, 5, { link: 'https://frontier.dev' }, { expand: 'none' });
+
+console.log(rich.toDelta());
+```
+
+This implementation is informed by [Peritext](https://www.inkandswitch.com/peritext/) and [Loro rich text](https://www.loro.dev/blog/loro-richtext): boundary expansion is explicit, mark ranges are anchored to the CRDT text sequence, and Delta export is the editor-facing representation. Frontier does not yet expose a full editor schema, ProseMirror/Quill binding package, or multi-value comment rendering policy; those belong above this package.
+
 ## API
 
 ```ts
@@ -101,10 +126,11 @@ The stable package surface is the plain document/update layer:
 - `createCrdtDocument`, map/list/plain-text/counter/binary JSON operations, materialized view patches, state vectors, snapshots, checkout/fork/viewAt, changes-since exports, history traversal, commit metadata, and conflict introspection.
 - Update tooling in `@shapeshift-labs/frontier-crdt/update`: encode/decode, inspect, merge, diff, filter, compact, obfuscate, update metadata, actor ranges, and state-vector conversion.
 - Awareness and branch wrappers as package-level contracts above the document API.
+- Rich-text marks with anchored ranges, explicit boundary expansion, deterministic same-key ordering, and Delta export are usable for editor prototypes and higher-layer bindings.
 
 The experimental surface is intentionally marked as such:
 
-- Rich text marks/spans/embeds and XML/tree convenience helpers are early CRDT surfaces. Use them for prototypes, but plain text and JSON containers are the hardened path.
+- Rich-text embeds, blocks, multi-value comment/link rendering policy, and XML/tree convenience helpers are early CRDT surfaces. Use them for prototypes, but plain text, JSON containers, and anchored inline marks are the hardened path.
 - Undo refuses to replay when the document has advanced at overlapping paths. It is safe against known destructive replay cases, but selective CRDT undo is still evolving.
 - Internal update byte layouts, packed actor/sequence storage, native text pieces, and compact update frames are optimization details. Do not treat encoded updates as cross-version durable storage unless a future release explicitly documents a compatibility window.
 
@@ -129,17 +155,20 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 7 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 9 rounds:
 
 | Fixture | Median | p95 | Heap/op |
 | --- | ---: | ---: | ---: |
-| Local text insert transaction | 2.42 us | 6.20 us | - |
-| Incremental text typing, 100 chars | 168.38 us | 268.56 us | - |
-| Update inspect metadata | 6.36 us | 9.40 us | - |
-| Merge duplicate updates | 9.43 us | 14.70 us | - |
-| Retained heap: 100-char text doc | 148.84 us | 168.30 us | 17.95 KiB |
-| Retained heap: merged update replay | 211.71 us | 224.63 us | 5.85 KiB |
-| Retained heap: compacted update bytes | 431.37 us | 443.34 us | 1.51 KiB |
+| Local text insert transaction | 2.26 us | 6.29 us | - |
+| Incremental text typing, 100 chars | 156.18 us | 233.46 us | - |
+| Rich text anchored mark format | 28.23 us | 31.82 us | - |
+| Rich text boundary insert resolve | 39.55 us | 53.72 us | - |
+| Rich text Delta export, 6 spans | 21.61 us | 22.65 us | - |
+| Update inspect metadata | 8.39 us | 15.14 us | - |
+| Merge duplicate updates | 9.85 us | 11.70 us | - |
+| Retained heap: 100-char text doc | 147.69 us | 194.11 us | 17.85 KiB |
+| Retained heap: merged update replay | 179.43 us | 195.12 us | 5.68 KiB |
+| Retained heap: compacted update bytes | 351.80 us | 381.37 us | 998 B |
 
 These are Frontier-only package measurements, not competitor comparisons.
 
