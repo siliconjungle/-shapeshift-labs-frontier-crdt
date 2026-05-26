@@ -10,6 +10,9 @@ This package sits above [`@shapeshift-labs/frontier`](https://www.npmjs.com/pack
 
 ## Related Packages
 
+- [`@shapeshift-labs/frontier-state-cache-idb`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state-cache-idb): IndexedDB persistence adapter for Frontier state-cache snapshots.
+- [`@shapeshift-labs/frontier-state-cache-file`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state-cache-file): Structured file persistence adapter for Frontier state-cache snapshots and change logs.
+- [`@shapeshift-labs/frontier-state-cache-sql`](https://www.npmjs.com/package/@shapeshift-labs/frontier-state-cache-sql): SQL persistence adapter for Frontier state-cache snapshots and change logs.
 - [`@shapeshift-labs/frontier`](https://www.npmjs.com/package/@shapeshift-labs/frontier): core JSON diff/apply primitives.
 - [`@shapeshift-labs/frontier-codec`](https://www.npmjs.com/package/@shapeshift-labs/frontier-codec): shared patch/history codec layer used below CRDT update tooling.
 - [`@shapeshift-labs/frontier-engine`](https://www.npmjs.com/package/@shapeshift-labs/frontier-engine): planned diff engine and history planning.
@@ -20,6 +23,9 @@ This package sits above [`@shapeshift-labs/frontier`](https://www.npmjs.com/pack
 
 Package source repositories:
 
+- [`siliconjungle/-shapeshift-labs-frontier-state-cache-idb`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state-cache-idb)
+- [`siliconjungle/-shapeshift-labs-frontier-state-cache-file`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state-cache-file)
+- [`siliconjungle/-shapeshift-labs-frontier-state-cache-sql`](https://github.com/siliconjungle/-shapeshift-labs-frontier-state-cache-sql)
 - [`siliconjungle/-shapeshift-labs-frontier`](https://github.com/siliconjungle/-shapeshift-labs-frontier)
 - [`siliconjungle/-shapeshift-labs-frontier-query`](https://github.com/siliconjungle/-shapeshift-labs-frontier-query)
 - [`siliconjungle/-shapeshift-labs-frontier-codec`](https://github.com/siliconjungle/-shapeshift-labs-frontier-codec)
@@ -104,12 +110,36 @@ import {
   decodeCrdtUpdate,
   diffCrdtUpdate,
   encodeCrdtUpdate,
+  encodeCrdtUpdateWithProfile,
   inspectCrdtUpdate,
   mergeCrdtUpdates
 } from '@shapeshift-labs/frontier-crdt/update';
 import { createCrdtBranch } from '@shapeshift-labs/frontier-crdt/branch';
 import { createCrdtUndoManager } from '@shapeshift-labs/frontier-crdt/undo';
 ```
+
+## Profile-Guided Update Codecs
+
+`getProfile()` now records learned CRDT workload shape in addition to per-path text plans. Profiles can classify text-heavy, grid-like, tree-move-heavy, sparse-actor, rich-text mark-heavy, and mixed workloads, then expose the preferred update codec through `profile.plans.codec.crdt` and `profile.plans.crdt.update`.
+
+```ts
+const doc = createCrdtDocument({ actorId: 'writer-a' });
+
+for (let row = 0; row < 4; row++) {
+  doc.change((tx) => {
+    tx.set(['grid', 'r' + row, 'c0'], row);
+    tx.set(['grid', 'r' + row, 'c1'], row + 1);
+  });
+}
+
+const profile = doc.getProfile();
+const update = doc.exportUpdate();
+
+const peer = createCrdtDocument({ actorId: 'reader-b', profile });
+peer.applyUpdate(update);
+```
+
+`encodeCrdtUpdateWithProfile(update, profile)` is also available on the `./update` subpath for storage or relay code that works with decoded update objects.
 
 ## Subpath Imports
 
@@ -122,6 +152,28 @@ import { createCrdtBranch } from '@shapeshift-labs/frontier-crdt/branch';
 import { createCrdtUndoManager } from '@shapeshift-labs/frontier-crdt/undo';
 ```
 
+## Version Frames
+
+Use version frames when an operation was authored against a specific document view and must be validated later before replay, optimistic commit, branch merge policy, undo, or rich-text anchor handling.
+
+```ts
+const doc = createCrdtDocument({ actorId: 'editor-a' });
+doc.set('/title', 'Draft');
+doc.markVersion('authored');
+
+const frame = doc.captureFrame({
+  mark: 'authored',
+  paths: ['/title']
+});
+
+doc.set('/sidebar/open', true);
+
+const evaluation = doc.evaluateFrame(frame);
+console.log(evaluation.ok, evaluation.relation, evaluation.conflictingPaths);
+```
+
+Frames store the causal version (`heads` plus `stateVector`) and optional bounded path snapshots. Plain version evaluation requires the document to be exactly at the authored version; path evaluation tolerates unrelated later CRDT operations and reports the changed/conflicting paths when watched state moved. Pass `includeValues: false` for overlap-only validation when a caller already owns value checks.
+
 ## Package Scope
 
 This package is intentionally limited to:
@@ -129,7 +181,8 @@ This package is intentionally limited to:
 - Native CRDT document creation and document handles.
 - CRDT JSON, map, list, plain text, counter, binary, tree, XML, and rich-text document operations.
 - CRDT update encode/decode/merge/diff/inspect/filter/obfuscate helpers.
-- Durable versioning, snapshots, checkout/fork helpers, branch wrappers, conflict introspection, awareness, and undo.
+- Profile-guided CRDT update codec selection for learned workload families.
+- Durable versioning, bounded version frames, snapshots, checkout/fork helpers, branch wrappers, conflict introspection, awareness, and undo.
 
 It does not expose sync providers, repos, storage adapters, document URLs, local sync networks, model-checking transports, WebSocket transports, or editor text bindings. Those belong in the higher `@shapeshift-labs/frontier-crdt-sync` and `@shapeshift-labs/frontier-crdt-websocket` packages.
 
@@ -137,8 +190,8 @@ It does not expose sync providers, repos, storage adapters, document URLs, local
 
 The stable package surface is the plain document/update layer:
 
-- `createCrdtDocument`, map/list/plain-text/counter/binary JSON operations, materialized view patches, state vectors, snapshots, checkout/fork/viewAt, changes-since exports, history traversal, commit metadata, and conflict introspection.
-- Update tooling in `@shapeshift-labs/frontier-crdt/update`: encode/decode, inspect, merge, diff, filter, compact, obfuscate, update metadata, actor ranges, and state-vector conversion.
+- `createCrdtDocument`, map/list/plain-text/counter/binary JSON operations, materialized view patches, state vectors, version frames, snapshots, checkout/fork/viewAt, changes-since exports, history traversal, commit metadata, and conflict introspection.
+- Update tooling in `@shapeshift-labs/frontier-crdt/update`: encode/decode, profile-guided encode, inspect, merge, diff, filter, compact, obfuscate, update metadata, actor ranges, and state-vector conversion.
 - Awareness and branch wrappers as package-level contracts above the document API.
 - Rich-text marks with anchored ranges, explicit boundary expansion, deterministic same-key ordering, and Delta export are usable for editor prototypes and higher-layer bindings.
 
@@ -163,6 +216,8 @@ npm run pack:dry
 
 The hardening suite covers concurrent map/list/text operations, list moves, same-key conflict introspection/resolution, undo refusal and non-overlapping replay, rich-text sidecars, branch/viewAt/metadata behavior, duplicate and partial update delivery, filtered updates, malformed update inputs, and randomized multi-peer convergence.
 
+Local `change()` transactions expose creates to later operations in the same transaction. Register deletes remain CRDT tombstone operations, and transaction-local list/tree/text helpers replay pending operations before planning later moves, deletes, or reads.
+
 ## Benchmarks
 
 Run the package-local benchmark:
@@ -171,20 +226,27 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 9 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 15 rounds:
 
-| Fixture | Median | p95 | Heap/op |
-| --- | ---: | ---: | ---: |
-| Local text insert transaction | 2.24 us | 6.66 us | - |
-| Incremental text typing, 100 chars | 167.34 us | 239.40 us | - |
-| Rich text anchored mark format | 30.45 us | 35.96 us | - |
-| Rich text boundary insert resolve | 39.32 us | 54.63 us | - |
-| Rich text Delta export, 6 spans | 19.36 us | 22.21 us | - |
-| Update inspect metadata | 6.34 us | 16.54 us | - |
-| Merge duplicate updates | 9.29 us | 11.84 us | - |
-| Retained heap: 100-char text doc | 147.30 us | 200.84 us | 17.84 KiB |
-| Retained heap: merged update replay | 185.19 us | 208.58 us | 5.58 KiB |
-| Retained heap: compacted update bytes | 374.32 us | 410.52 us | 916 B |
+| Fixture | Median | p95 | Bytes/op | Heap/op |
+| --- | ---: | ---: | ---: | ---: |
+| Local text insert transaction | 4.23 us | 10.81 us | - | - |
+| Transaction create/move/read locals | 32.52 us | 46.65 us | - | - |
+| Frame evaluate, 8 watched paths | 13.06 us | 27.36 us | - | - |
+| Incremental text typing, 100 chars | 198.74 us | 242.81 us | - | - |
+| Profile learn grid workload | 11.62 us | 35.80 us | - | - |
+| Auto grid update encode, 8 cells | 2.45 us | 5.77 us | 440 B | - |
+| Profile-guided grid update encode, 8 cells | 2.98 us | 6.70 us | 72 B | - |
+| Auto grid update apply, 8 cells | 25.25 us | 47.93 us | 440 B | - |
+| Profile-guided grid update apply, 8 cells | 28.72 us | 42.85 us | 72 B | - |
+| Rich text anchored mark format | 35.41 us | 41.72 us | - | - |
+| Rich text boundary insert resolve | 59.33 us | 95.37 us | - | - |
+| Rich text Delta export, 6 spans | 24.02 us | 33.72 us | - | - |
+| Update inspect metadata | 9.93 us | 19.88 us | - | - |
+| Merge duplicate updates | 11.81 us | 16.01 us | - | - |
+| Retained heap: 100-char text doc | 212.72 us | 265.60 us | - | 18.36 KiB |
+| Retained heap: merged update replay | 299.68 us | 356.96 us | - | 5.97 KiB |
+| Retained heap: compacted update bytes | 627.74 us | 833.83 us | - | 1.17 KiB |
 
 These are Frontier-only package measurements, not competitor comparisons.
 

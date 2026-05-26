@@ -295,6 +295,9 @@ export type CrdtUpdateFormat = 'auto' | 'json' | 'object' | 'base64url';
 export interface CrdtUpdateConvertOptions {
   /** Output representation. `auto` uses Frontier's compact codec; `json` forces JSON; `base64url` returns text. */
   format?: CrdtUpdateFormat;
+
+  /** Optional learned CRDT profile used when `format` is `auto` or `base64url`. */
+  profile?: CrdtProfile | null;
 }
 
 export interface CrdtUpdateObfuscateOptions {
@@ -335,6 +338,48 @@ export interface CrdtChangeOptions {
 export type CrdtVersion = CrdtStateVector | CrdtOperationId[];
 
 export type CrdtVersionRelation = 'equal' | 'before' | 'after' | 'concurrent';
+
+export type CrdtFrameEvaluationMode = 'version' | 'paths';
+
+export interface CrdtFramePathEntry {
+  path: JsonPath;
+  exists: boolean;
+  value?: JsonValue;
+  valueCaptured?: boolean;
+}
+
+export interface CrdtFrameReference {
+  version: CrdtVersion;
+  heads: CrdtOperationId[];
+  stateVector: CrdtStateVector;
+  paths?: CrdtFramePathEntry[];
+  mark?: string;
+  metadata?: JsonObject;
+}
+
+export interface CrdtFrameCaptureOptions {
+  version?: CrdtVersion | null;
+  mark?: string;
+  paths?: readonly WatchPath[];
+  includeValues?: boolean;
+  maxPaths?: number;
+  metadata?: JsonObject;
+}
+
+export interface CrdtFrameEvaluationOptions {
+  mode?: CrdtFrameEvaluationMode;
+  paths?: readonly WatchPath[];
+}
+
+export interface CrdtFrameEvaluation {
+  ok: boolean;
+  relation: CrdtVersionRelation;
+  mode: CrdtFrameEvaluationMode;
+  checkedPaths: JsonPath[];
+  changedPaths: JsonPath[];
+  conflictingPaths: JsonPath[];
+  reason?: 'equal' | 'version-changed' | 'future-version' | 'path-overlap' | 'path-value-changed';
+}
 
 export interface CrdtForkOptions {
   /** Actor id for the forked document. Omit to create a fresh local actor id. */
@@ -437,6 +482,9 @@ export interface CrdtProfile {
 
   /** Learned per-path text workload profiles. */
   text?: CrdtTextProfile[];
+
+  /** Learned document/update workload profiles that guide CRDT update codec selection. */
+  workloads?: CrdtWorkloadProfile[];
 }
 
 export interface CrdtProfileSettings {
@@ -468,6 +516,43 @@ export interface CrdtTextProfile {
 
   /** Learned threshold for enabling the visible-position route index. */
   routeIndexThreshold?: number;
+}
+
+export type CrdtUpdateCodecStrategy = 'auto' | 'json' | 'binary' | 'columnar-text';
+
+export type CrdtWorkloadFamily =
+  | 'text-heavy'
+  | 'grid-like'
+  | 'tree-move-heavy'
+  | 'rich-text-mark-heavy'
+  | 'sparse-actor'
+  | 'mixed';
+
+export interface CrdtWorkloadProfile {
+  /** Recognized document/update workload family. */
+  workload: CrdtWorkloadFamily;
+
+  /** Preferred update codec for this workload. */
+  update?: CrdtUpdateCodecStrategy;
+
+  /** Local or integrated updates observed while learning this workload. */
+  updates?: number;
+
+  /** Logical CRDT operations observed while learning this workload. */
+  operations?: number;
+
+  /** Distinct actor ids observed in the learned sample. */
+  actors?: number;
+
+  /** Hot operation paths sampled for the workload. */
+  paths?: JsonPath[];
+
+  /** Optional shape counters used for diagnostics and benchmark notes. */
+  textOps?: number;
+  setOps?: number;
+  treeOps?: number;
+  richTextOps?: number;
+  sparseActorGaps?: number;
 }
 
 export type CrdtConflictValueType = 'set' | 'delete' | 'binary';
@@ -1267,6 +1352,12 @@ export interface CrdtDocument {
 
   /** Compare two versions by operation-set inclusion from this document's log. */
   compareVersions(left?: CrdtVersion | null, right?: CrdtVersion | null): CrdtVersionRelation;
+
+  /** Capture a bounded authored-state frame for validating later optimistic or branch-aware work. */
+  captureFrame(options?: CrdtFrameCaptureOptions): CrdtFrameReference;
+
+  /** Evaluate whether the current document is still valid for work authored against a frame. */
+  evaluateFrame(frame: CrdtFrameReference, options?: CrdtFrameEvaluationOptions): CrdtFrameEvaluation;
 
   /** Capture a versioned, replayable operation snapshot with optional metadata/view payloads. */
   snapshot(options?: CrdtSnapshotOptions): CrdtSnapshot;

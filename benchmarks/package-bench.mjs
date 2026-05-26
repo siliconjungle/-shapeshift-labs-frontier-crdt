@@ -108,7 +108,13 @@ function consume(value) {
 }
 
 import { createCrdtDocument } from '../dist/index.js';
-import { inspectCrdtUpdate, mergeCrdtUpdates } from '../dist/crdt-update.js';
+import {
+  decodeCrdtUpdate,
+  encodeCrdtUpdate,
+  encodeCrdtUpdateWithProfile,
+  inspectCrdtUpdate,
+  mergeCrdtUpdates
+} from '../dist/crdt-update.js';
 
 const richDeltaFixture = (() => {
   const doc = makeRichTextDoc();
@@ -118,10 +124,19 @@ const richDeltaFixture = (() => {
   rich.format(17, 25, { link: 'https://frontier.local' }, { expand: 'none' });
   return doc;
 })();
+const gridCodecFixture = makeGridCodecFixture();
+const frameFixture = makeFrameFixture();
 
 const rows = [
   runRow('Local text insert transaction', 500, () => { const doc = createCrdtDocument({ actorId: 'bench-a' }); doc.text('/body').insert(0, 'frontier'); sink += doc.toJSON().body.length; }),
+  runRow('Transaction create/move/read locals', 500, () => { const doc = createCrdtDocument({ actorId: 'bench-tx-local-' + (++sink) }); doc.change((tx) => { tx.list('/items').insert(0, ['a', 'b']); tx.list('/items').move(0, 2, 1); tx.binary('/blob').set(new Uint8Array([1, 2, 3])); sink += tx.binary('/blob').get()?.byteLength || 0; }); sink += doc.toJSON().items.length; }),
+  runRow('Frame evaluate, 8 watched paths', 1000, () => { const result = frameFixture.doc.evaluateFrame(frameFixture.frame); if (!result.ok) throw new Error('frame fixture became stale'); sink += result.checkedPaths.length + result.changedPaths.length; }),
   runRow('Incremental text typing, 100 chars', 80, () => { const doc = createCrdtDocument({ actorId: 'bench-type' }); const text = doc.text('/body'); for (let i = 0; i < 100; i++) text.insert(i, 'x'); sink += doc.toJSON().body.length; }),
+  runRow('Profile learn grid workload', 200, () => { sink += makeGridProfile().workloads?.length || 0; }),
+  runRow('Auto grid update encode, 8 cells', 1000, () => { sink += encodeCrdtUpdate(gridCodecFixture.update).byteLength; }, { bytes: gridCodecFixture.autoBytes }),
+  runRow('Profile-guided grid update encode, 8 cells', 1000, () => { sink += encodeCrdtUpdateWithProfile(gridCodecFixture.update, gridCodecFixture.profile).byteLength; }, { bytes: gridCodecFixture.profiledBytes, controlBytes: gridCodecFixture.autoBytes }),
+  runRow('Auto grid update apply, 8 cells', 500, () => { const doc = createCrdtDocument({ actorId: 'bench-grid-apply-auto' }); doc.applyUpdate(gridCodecFixture.autoBytesUpdate); sink += doc.toJSON().grid.r0.c0; }, { bytes: gridCodecFixture.autoBytes }),
+  runRow('Profile-guided grid update apply, 8 cells', 500, () => { const doc = createCrdtDocument({ actorId: 'bench-grid-apply-profiled' }); doc.applyUpdate(gridCodecFixture.profiledUpdate); sink += doc.toJSON().grid.r0.c0; }, { bytes: gridCodecFixture.profiledBytes, controlBytes: gridCodecFixture.autoBytes }),
   runRow('Rich text anchored mark format', 500, () => { const doc = makeRichTextDoc(); doc.richText('/doc').format(0, 5, { bold: true }, { expand: 'after' }); sink += doc.richText('/doc').toDelta().length; }),
   runRow('Rich text boundary insert resolve', 300, () => { const doc = makeRichTextDoc(); const rich = doc.richText('/doc'); rich.format(0, 5, { bold: true }, { expand: 'after' }); rich.insert(5, '!'); sink += rich.toDelta().length; }),
   runRow('Rich text Delta export, 6 spans', 1000, () => { sink += richDeltaFixture.richText('/doc').toDelta().length; }),
@@ -136,3 +151,42 @@ function makeUpdate() { const doc = createCrdtDocument({ actorId: 'bench-update'
 function makeBulkUpdate() { return makeTextDoc(100).exportUpdate(); }
 function makeTextDoc(length) { const doc = createCrdtDocument({ actorId: 'bench-text-doc' }); const text = doc.text('/body'); for (let i = 0; i < length; i++) text.insert(i, 'x'); return doc; }
 function makeRichTextDoc() { const doc = createCrdtDocument({ actorId: 'bench-rich-' + (++sink) }); doc.richText('/doc').fromDelta([{ insert: 'hello world from frontier rich text' }]); return doc; }
+function makeFrameFixture() {
+  const doc = createCrdtDocument({ actorId: 'bench-frame' });
+  const paths = new Array(8);
+  for (let i = 0; i < paths.length; i++) {
+    doc.set('/doc/f' + i, i);
+    paths[i] = '/doc/f' + i;
+  }
+  const frame = doc.captureFrame({ paths });
+  doc.set('/ui/theme', 'dark');
+  return { doc, frame };
+}
+function makeGridProfile() {
+  const doc = createCrdtDocument({ actorId: 'bench-grid-profile' + (++sink) });
+  for (let row = 0; row < 4; row++) {
+    doc.change((tx) => {
+      tx.set(['grid', 'r' + row, 'c0'], row);
+      tx.set(['grid', 'r' + row, 'c1'], row + 1);
+    });
+  }
+  return doc.getProfile();
+}
+function makeGridCodecFixture() {
+  const profile = makeGridProfile();
+  const doc = createCrdtDocument({ actorId: 'bench-grid-update', adaptive: false });
+  const result = doc.change((tx) => {
+    for (let i = 0; i < 8; i++) tx.set(['grid', 'r' + i, 'c' + (i % 2)], i);
+  });
+  const update = decodeCrdtUpdate(result.update);
+  const autoBytesUpdate = encodeCrdtUpdate(update);
+  const profiledUpdate = encodeCrdtUpdateWithProfile(update, profile);
+  return {
+    profile,
+    update,
+    autoBytesUpdate,
+    profiledUpdate,
+    autoBytes: autoBytesUpdate.byteLength,
+    profiledBytes: profiledUpdate.byteLength
+  };
+}

@@ -35,6 +35,7 @@ import { setOwnValue } from './object.js';
 import { getCachedPointerPath } from '@shapeshift-labs/frontier/pointer';
 import {
   createCrdtProfilePlansSnapshot,
+  mergeProfilePlans,
   readProfilePlans
 } from '@shapeshift-labs/frontier-engine/profile';
 import type {
@@ -53,6 +54,12 @@ import type {
   CrdtDocument,
   CrdtDocumentOptions,
   CrdtForkOptions,
+  CrdtFrameCaptureOptions,
+  CrdtFrameEvaluation,
+  CrdtFrameEvaluationMode,
+  CrdtFrameEvaluationOptions,
+  CrdtFramePathEntry,
+  CrdtFrameReference,
   CrdtHistoryEntry,
   CrdtHistoryOptions,
   CrdtHistoryVisitor,
@@ -80,6 +87,7 @@ import type {
   CrdtTreeCreateResult,
   CrdtTreeHandle,
   CrdtTreeNode,
+  CrdtUpdateCodecStrategy,
   CrdtTransaction,
   CrdtUpdate,
   CrdtVersion,
@@ -88,6 +96,8 @@ import type {
   CrdtVersionMark,
   CrdtVersionMarkOptions,
   CrdtVersionRelation,
+  CrdtWorkloadFamily,
+  CrdtWorkloadProfile,
   CrdtXmlHandle,
   CrdtXmlNode,
   DeltaView,
@@ -142,6 +152,9 @@ const CRDT_POSITIONAL_TEXT_COMPRESSION_MIN_BYTES = 4096;
 const CRDT_TEXT_PROFILE_BATCH_ROUTE_INDEX_THRESHOLD = 4096;
 const CRDT_TEXT_PROFILE_BATCH_MIN = 1.05;
 const CRDT_TEXT_BATCH_DELETE_RANGE_MIN = Number.MAX_SAFE_INTEGER;
+const CRDT_WORKLOAD_PROFILE_MIN_UPDATES = 4;
+const CRDT_WORKLOAD_PROFILE_MIN_OPERATIONS = 8;
+const CRDT_WORKLOAD_PROFILE_MAX_PATHS = 6;
 const CRDT_BINARY_PATH_OPTIONS: BinaryPathCodecOptions = {
   numberTag: 1,
   stringTag: 0,
@@ -157,6 +170,7 @@ const textDecoder = new TextDecoder();
 const trustedDecodedUpdates = new WeakSet<CrdtUpdate>();
 const trustedEncodedUpdates = new WeakMap<ArrayBufferView, CrdtUpdate>();
 const pathKeyCache = new WeakMap<JsonPath, string>();
+const crdtProfileStrategyCache = new WeakMap<CrdtProfile, CrdtUpdateCodecStrategy>();
 const scheduledTextCandidateCache = new WeakMap<CrdtOperation[], Map<number, CrdtScheduledTextEncodingCandidate | null>>();
 const EMPTY_UPDATE_BYTES = new Uint8Array(0);
 const EMPTY_TRANSACTION_VIEW_PATCH: Patch = [];
@@ -222,11 +236,44 @@ type CrdtTextProfileStats = {
   totalDeleteCount: number;
 };
 
+type CrdtWorkloadProfilePlan = {
+  workload: CrdtWorkloadFamily;
+  update: CrdtUpdateCodecStrategy;
+  updates: number;
+  operations: number;
+  actors: number;
+  paths: JsonPath[];
+  score: number;
+  textOps: number;
+  setOps: number;
+  treeOps: number;
+  richTextOps: number;
+  sparseActorGaps: number;
+};
+
+type CrdtWorkloadProfileStats = {
+  updates: number;
+  operations: number;
+  textOps: number;
+  setOps: number;
+  gridSetOps: number;
+  treeOps: number;
+  treeMoveOps: number;
+  richTextOps: number;
+  sparseActorGaps: number;
+  multiActorUpdates: number;
+  actors: Set<string>;
+  pathHits: Map<string, { path: JsonPath; count: number }>;
+  actorMaxSeq: Map<string, number>;
+};
+
 type CrdtAdaptiveProfileState = {
   enabled: boolean;
   plans: ProfilePlans | undefined;
   textProfiles: Map<string, CrdtTextProfilePlan>;
   textStats: Map<string, CrdtTextProfileStats>;
+  workloadProfiles: Map<CrdtWorkloadFamily, CrdtWorkloadProfilePlan>;
+  workloadStats: CrdtWorkloadProfileStats | null;
 };
 
 type CrdtTextDeleteOperation =
@@ -391,39 +438,77 @@ export function decodeCrdtVersion(encoded: string): CrdtVersion {
 }
 
 export function encodeCrdtUpdate(update: CrdtUpdate): Uint8Array {
+  const bytes = encodeCrdtUpdateForStrategy(update, 'auto');
+  return markEncodedUpdateIfTrusted(bytes, update);
+}
+
+export function encodeCrdtUpdateWithProfile(update: CrdtUpdate, profile?: CrdtProfile | null): Uint8Array {
+  const bytes = encodeCrdtUpdateForStrategy(update, readCrdtProfileUpdateStrategy(profile));
+  return markEncodedUpdateIfTrusted(bytes, update);
+}
+
+function encodeCrdtUpdateForStrategy(update: CrdtUpdate, strategy: CrdtUpdateCodecStrategy): Uint8Array {
   if (update.ops.length === 0 && update.metadata === undefined && update.metadataEntries === undefined) return EMPTY_UPDATE_BYTES;
   if (update.metadata !== undefined || update.metadataEntries !== undefined) {
-    return markEncodedUpdateIfTrusted(encodeJsonCrdtUpdate(update), update);
+    return encodeJsonCrdtUpdate(update);
+  }
+  if (strategy === 'json') return encodeJsonCrdtUpdate(update);
+  if (strategy === 'columnar-text') {
+    const positionalText = encodePositionedTextLogUpdate(update);
+    if (positionalText !== null) return positionalText;
+    return encodeCrdtUpdateForStrategy(update, 'binary');
+  }
+  if (strategy === 'binary') {
+    const miniAppendTextInsert = encodeMiniBinaryTextAppendInsertUpdate(update);
+    if (miniAppendTextInsert !== null) return miniAppendTextInsert;
+    const miniPairTextInsert = encodeMiniBinaryTextPairInsertUpdate(update);
+    if (miniPairTextInsert !== null) return miniPairTextInsert;
+    const miniTextInsert = encodeMiniBinaryTextInsertUpdate(update);
+    if (miniTextInsert !== null) return miniTextInsert;
+    const miniRemoteTextInsert = encodeMiniBinaryTextRemoteInsertUpdate(update);
+    if (miniRemoteTextInsert !== null) return miniRemoteTextInsert;
+    const tinyTextInsert = encodeTinyBinaryTextInsertUpdate(update);
+    if (tinyTextInsert !== null) return tinyTextInsert;
+    const miniMapSet = encodeMiniBinaryMapSetIntUpdate(update);
+    if (miniMapSet !== null) return miniMapSet;
+    const singleOp = encodeSingleBinaryCrdtUpdate(update);
+    if (singleOp !== null) return singleOp;
+    return encodeBinaryCrdtUpdate(update);
   }
   if (update.ops.length >= 16) {
     const positionalText = encodePositionedTextLogUpdate(update);
-    if (positionalText !== null) return markEncodedUpdateIfTrusted(positionalText, update);
+    if (positionalText !== null) return positionalText;
   }
   const miniAppendTextInsert = encodeMiniBinaryTextAppendInsertUpdate(update);
-  if (miniAppendTextInsert !== null) return markEncodedUpdateIfTrusted(miniAppendTextInsert, update);
+  if (miniAppendTextInsert !== null) return miniAppendTextInsert;
   const miniPairTextInsert = encodeMiniBinaryTextPairInsertUpdate(update);
-  if (miniPairTextInsert !== null) return markEncodedUpdateIfTrusted(miniPairTextInsert, update);
+  if (miniPairTextInsert !== null) return miniPairTextInsert;
   const miniTextInsert = encodeMiniBinaryTextInsertUpdate(update);
-  if (miniTextInsert !== null) return markEncodedUpdateIfTrusted(miniTextInsert, update);
+  if (miniTextInsert !== null) return miniTextInsert;
   const miniRemoteTextInsert = encodeMiniBinaryTextRemoteInsertUpdate(update);
-  if (miniRemoteTextInsert !== null) return markEncodedUpdateIfTrusted(miniRemoteTextInsert, update);
+  if (miniRemoteTextInsert !== null) return miniRemoteTextInsert;
   const tinyTextInsert = encodeTinyBinaryTextInsertUpdate(update);
-  if (tinyTextInsert !== null) return markEncodedUpdateIfTrusted(tinyTextInsert, update);
+  if (tinyTextInsert !== null) return tinyTextInsert;
   const miniMapSet = encodeMiniBinaryMapSetIntUpdate(update);
-  if (miniMapSet !== null) return markEncodedUpdateIfTrusted(miniMapSet, update);
+  if (miniMapSet !== null) return miniMapSet;
   const singleOp = encodeSingleBinaryCrdtUpdate(update);
-  if (singleOp !== null) return markEncodedUpdateIfTrusted(singleOp, update);
+  if (singleOp !== null) return singleOp;
   if (shouldPreferBinaryCrdtUpdate(update.ops) && (update.ops.length >= 16 || hasSpanningOperation(update.ops))) {
-    return markEncodedUpdateIfTrusted(encodeBinaryCrdtUpdate(update), update);
+    return encodeBinaryCrdtUpdate(update);
   }
   const json = encodeJsonCrdtUpdate(update);
-  if (update.ops.length < 16) return markEncodedUpdateIfTrusted(json, update);
+  if (update.ops.length < 16) return json;
   const binary = encodeBinaryCrdtUpdate(update);
-  return markEncodedUpdateIfTrusted(binary.byteLength * 10 < json.byteLength * 9 ? binary : json, update);
+  return binary.byteLength * 10 < json.byteLength * 9 ? binary : json;
 }
 
 function encodeTrustedCrdtUpdate(update: CrdtUpdate): Uint8Array {
-  const bytes = encodeCrdtUpdate(update);
+  const bytes = encodeCrdtUpdateForStrategy(update, 'auto');
+  return markEncodedUpdate(bytes, updateNeedsTrustedClone(update) ? cloneCrdtUpdateForTrust(update) : update);
+}
+
+function encodeTrustedCrdtUpdateWithStrategy(update: CrdtUpdate, strategy: CrdtUpdateCodecStrategy): Uint8Array {
+  const bytes = encodeCrdtUpdateForStrategy(update, strategy);
   return markEncodedUpdate(bytes, updateNeedsTrustedClone(update) ? cloneCrdtUpdateForTrust(update) : update);
 }
 
@@ -5846,6 +5931,15 @@ function markOperationReadyIds(ready: Set<string>, op: CrdtOperation): void {
   for (let seq = op.seq; seq <= end; seq++) ready.add(`${op.actor}:${seq}`);
 }
 
+function operationIdsIntersectSet(op: CrdtOperation, ids: Set<string>): boolean {
+  if (!isSpanningOperation(op)) return ids.has(op.id);
+  const end = operationEndSeq(op);
+  for (let seq = op.seq; seq <= end; seq++) {
+    if (ids.has(`${op.actor}:${seq}`)) return true;
+  }
+  return false;
+}
+
 function createdElementId(op: CrdtOperation, index: number): string {
   return op.type === 'textRun' || op.type === 'listRun' ? `${op.actor}:${op.seq + index}/0` : `${op.id}/${index}`;
 }
@@ -6203,13 +6297,21 @@ function createCrdtAdaptiveProfileState(options?: CrdtDocumentOptions): CrdtAdap
     enabled,
     plans: profileState.plans,
     textProfiles: profileState.textProfiles,
-    textStats: new Map()
+    textStats: new Map(),
+    workloadProfiles: profileState.workloadProfiles,
+    workloadStats: null
   };
 }
 
-function readCrdtProfile(profile?: CrdtProfile | null): { enabled: boolean; plans: ProfilePlans | undefined; textProfiles: Map<string, CrdtTextProfilePlan> } {
+function readCrdtProfile(profile?: CrdtProfile | null): {
+  enabled: boolean;
+  plans: ProfilePlans | undefined;
+  textProfiles: Map<string, CrdtTextProfilePlan>;
+  workloadProfiles: Map<CrdtWorkloadFamily, CrdtWorkloadProfilePlan>;
+} {
   const textProfiles = new Map<string, CrdtTextProfilePlan>();
-  if (profile === undefined || profile === null) return { enabled: true, plans: undefined, textProfiles };
+  const workloadProfiles = new Map<CrdtWorkloadFamily, CrdtWorkloadProfilePlan>();
+  if (profile === undefined || profile === null) return { enabled: true, plans: undefined, textProfiles, workloadProfiles };
   if (typeof profile !== 'object' || Array.isArray(profile)) throw new TypeError('CRDT profile must be an object');
   if (profile.version !== undefined && profile.version !== CRDT_PROFILE_VERSION) {
     throw new TypeError('unsupported CRDT profile version: ' + profile.version);
@@ -6227,7 +6329,14 @@ function readCrdtProfile(profile?: CrdtProfile | null): { enabled: boolean; plan
       textProfiles.set(pathKey(plan.path), plan);
     }
   }
-  return { enabled, plans: readProfilePlans(profile, 'CRDT profile'), textProfiles };
+  if (profile.workloads !== undefined) {
+    if (!Array.isArray(profile.workloads)) throw new TypeError('CRDT profile workloads must be an array');
+    for (let i = 0, length = profile.workloads.length; i < length; i++) {
+      const plan = readCrdtWorkloadProfile(profile.workloads[i], i);
+      workloadProfiles.set(plan.workload, plan);
+    }
+  }
+  return { enabled, plans: readProfilePlans(profile, 'CRDT profile'), textProfiles, workloadProfiles };
 }
 
 function readCrdtTextProfile(profile: CrdtTextProfile, index: number): CrdtTextProfilePlan {
@@ -6264,15 +6373,54 @@ function readCrdtTextProfile(profile: CrdtTextProfile, index: number): CrdtTextP
   };
 }
 
+function readCrdtWorkloadProfile(profile: CrdtWorkloadProfile, index: number): CrdtWorkloadProfilePlan {
+  if (profile === null || typeof profile !== 'object' || Array.isArray(profile)) {
+    throw new TypeError('CRDT workload profile at index ' + index + ' must be an object');
+  }
+  const workload = readCrdtWorkloadFamily(profile.workload, 'CRDT workload profile workload');
+  const update = profile.update === undefined ? defaultCrdtWorkloadUpdateStrategy(workload) : readCrdtUpdateCodecStrategy(
+    profile.update,
+    'CRDT workload profile update'
+  );
+  const updates = readOptionalNonNegativeInteger(profile.updates, 'CRDT workload profile updates') || 0;
+  const operations = readOptionalNonNegativeInteger(profile.operations, 'CRDT workload profile operations') || 0;
+  const actors = readOptionalNonNegativeInteger(profile.actors, 'CRDT workload profile actors') || 0;
+  const textOps = readOptionalNonNegativeInteger(profile.textOps, 'CRDT workload profile textOps') || 0;
+  const setOps = readOptionalNonNegativeInteger(profile.setOps, 'CRDT workload profile setOps') || 0;
+  const treeOps = readOptionalNonNegativeInteger(profile.treeOps, 'CRDT workload profile treeOps') || 0;
+  const richTextOps = readOptionalNonNegativeInteger(profile.richTextOps, 'CRDT workload profile richTextOps') || 0;
+  const sparseActorGaps = readOptionalNonNegativeInteger(profile.sparseActorGaps, 'CRDT workload profile sparseActorGaps') || 0;
+  return {
+    workload,
+    update,
+    updates,
+    operations,
+    actors,
+    paths: readOptionalCrdtProfilePaths(profile.paths, 'CRDT workload profile paths'),
+    score: operations,
+    textOps,
+    setOps,
+    treeOps,
+    richTextOps,
+    sparseActorGaps
+  };
+}
+
 function createCrdtProfileSnapshot(state: CrdtAdaptiveProfileState): CrdtProfile {
   const text = Array.from(state.textProfiles.values()).map(writeCrdtTextProfile);
   text.sort((left, right) => compareProfilePath(left.path, right.path));
+  const workloads = Array.from(state.workloadProfiles.values()).map(writeCrdtWorkloadProfile);
+  workloads.sort((left, right) => {
+    const diff = (right.operations || 0) - (left.operations || 0);
+    return diff !== 0 ? diff : left.workload < right.workload ? -1 : left.workload > right.workload ? 1 : 0;
+  });
   const profile: CrdtProfile = {
     version: CRDT_PROFILE_VERSION as 1,
     settings: { adaptive: state.enabled }
   };
   if (text.length !== 0) profile.text = text;
-  const plans = createCrdtProfilePlansSnapshot(state.plans, text.length);
+  if (workloads.length !== 0) profile.workloads = workloads;
+  const plans = createProfilePlansForCrdtSnapshot(state, text.length);
   if (plans !== undefined) profile.plans = plans;
   return profile;
 }
@@ -6288,6 +6436,39 @@ function writeCrdtTextProfile(plan: CrdtTextProfilePlan): CrdtTextProfile {
     operations: plan.operations,
     routeIndexThreshold: plan.routeIndexThreshold
   };
+}
+
+function writeCrdtWorkloadProfile(plan: CrdtWorkloadProfilePlan): CrdtWorkloadProfile {
+  const profile: CrdtWorkloadProfile = {
+    workload: plan.workload,
+    update: plan.update,
+    updates: plan.updates,
+    operations: plan.operations,
+    actors: plan.actors
+  };
+  if (plan.paths.length !== 0) profile.paths = plan.paths.map((path) => path.slice());
+  if (plan.textOps !== 0) profile.textOps = plan.textOps;
+  if (plan.setOps !== 0) profile.setOps = plan.setOps;
+  if (plan.treeOps !== 0) profile.treeOps = plan.treeOps;
+  if (plan.richTextOps !== 0) profile.richTextOps = plan.richTextOps;
+  if (plan.sparseActorGaps !== 0) profile.sparseActorGaps = plan.sparseActorGaps;
+  return profile;
+}
+
+function createProfilePlansForCrdtSnapshot(
+  state: CrdtAdaptiveProfileState,
+  nativeTextProfileCount: number
+): ProfilePlans | undefined {
+  const generated = createCrdtProfilePlansSnapshot(state.plans, nativeTextProfileCount);
+  const strategy = readCrdtProfileStateUpdateStrategy(state);
+  if (strategy === 'auto') return generated;
+  return mergeProfilePlans(generated, {
+    codec: { crdt: strategy },
+    crdt: {
+      update: strategy,
+      text: nativeTextProfileCount === 0 ? 'chunked-ids' : 'native-piece'
+    }
+  });
 }
 
 function observeCrdtTextTransactionShape(
@@ -6410,12 +6591,313 @@ function maybeLearnCrdtTextProfile(
     routeIndexThreshold: readDefaultCrdtTextRouteIndexThreshold(strategy)
   };
   state.textProfiles.set(key, plan);
+  state.workloadProfiles.set('text-heavy', {
+    workload: 'text-heavy',
+    update: 'columnar-text',
+    updates: stats.transactions,
+    operations: stats.operations,
+    actors: 1,
+    paths: [stats.path.slice()],
+    score: stats.operations,
+    textOps: stats.operations,
+    setOps: 0,
+    treeOps: 0,
+    richTextOps: 0,
+    sparseActorGaps: 0
+  });
 }
 
 function readDefaultCrdtTextRouteIndexThreshold(strategy: 'direct-splice' | 'batch-splice'): number {
   return strategy === 'batch-splice'
     ? CRDT_TEXT_PROFILE_BATCH_ROUTE_INDEX_THRESHOLD
     : CRDT_TEXT_PROFILE_DEFAULT_ROUTE_INDEX_THRESHOLD;
+}
+
+function createCrdtWorkloadProfileStats(): CrdtWorkloadProfileStats {
+  return {
+    updates: 0,
+    operations: 0,
+    textOps: 0,
+    setOps: 0,
+    gridSetOps: 0,
+    treeOps: 0,
+    treeMoveOps: 0,
+    richTextOps: 0,
+    sparseActorGaps: 0,
+    multiActorUpdates: 0,
+    actors: new Set(),
+    pathHits: new Map(),
+    actorMaxSeq: new Map()
+  };
+}
+
+function observeCrdtWorkloadShape(state: CrdtAdaptiveProfileState, ops: readonly CrdtOperation[]): void {
+  if (!state.enabled || ops.length === 0) return;
+  if (ops.length === 1 && isTextSequenceOperation(ops[0])) return;
+  const stats = state.workloadStats === null
+    ? (state.workloadStats = createCrdtWorkloadProfileStats())
+    : state.workloadStats;
+  let firstActor: string | undefined;
+  let multiActor = false;
+  stats.updates++;
+
+  for (let i = 0, length = ops.length; i < length; i++) {
+    const op = ops[i];
+    const span = operationSeqSpan(op);
+    stats.operations += span;
+    stats.actors.add(op.actor);
+    if (firstActor === undefined) firstActor = op.actor;
+    else if (firstActor !== op.actor) multiActor = true;
+    noteCrdtWorkloadPath(stats, op.path, span);
+
+    const previousSeq = stats.actorMaxSeq.get(op.actor) || 0;
+    if (previousSeq !== 0 && op.seq > previousSeq + 1) stats.sparseActorGaps++;
+    const endSeq = operationEndSeq(op);
+    if (endSeq > previousSeq) stats.actorMaxSeq.set(op.actor, endSeq);
+
+    if (isTextSequenceOperation(op)) stats.textOps += span;
+    if (op.type === 'set' || op.type === 'mapSetRun') {
+      stats.setOps += span;
+      if (isGridLikeSetOperation(op)) stats.gridSetOps += span;
+    }
+    if (isTreeOperation(op)) {
+      stats.treeOps += span;
+      if (op.type === 'treeMove') stats.treeMoveOps += span;
+    }
+    if (isRichTextSidecarOperation(op)) stats.richTextOps += span;
+  }
+
+  if (multiActor) stats.multiActorUpdates++;
+  maybeLearnCrdtWorkloadProfiles(state, stats);
+}
+
+function observeCrdtNativeTextLogShape(
+  state: CrdtAdaptiveProfileState,
+  actor: string,
+  path: JsonPath,
+  firstSeq: number,
+  lastSeq: number
+): void {
+  if (!state.enabled || lastSeq < firstSeq) return;
+  const count = lastSeq - firstSeq + 1;
+  if (count >= CRDT_WORKLOAD_PROFILE_MIN_OPERATIONS) {
+    state.workloadProfiles.set('text-heavy', {
+      workload: 'text-heavy',
+      update: 'columnar-text',
+      updates: 1,
+      operations: count,
+      actors: 1,
+      paths: [path.slice()],
+      score: count,
+      textOps: count,
+      setOps: 0,
+      treeOps: 0,
+      richTextOps: 0,
+      sparseActorGaps: 0
+    });
+    return;
+  }
+  const stats = state.workloadStats === null
+    ? (state.workloadStats = createCrdtWorkloadProfileStats())
+    : state.workloadStats;
+  stats.updates++;
+  stats.operations += count;
+  stats.textOps += count;
+  stats.actors.add(actor);
+  noteCrdtWorkloadPath(stats, path, count);
+  const previousSeq = stats.actorMaxSeq.get(actor) || 0;
+  if (previousSeq !== 0 && firstSeq > previousSeq + 1) stats.sparseActorGaps++;
+  if (lastSeq > previousSeq) stats.actorMaxSeq.set(actor, lastSeq);
+  maybeLearnCrdtWorkloadProfiles(state, stats);
+}
+
+function maybeLearnCrdtWorkloadProfiles(
+  state: CrdtAdaptiveProfileState,
+  stats: CrdtWorkloadProfileStats
+): void {
+  if (stats.operations < CRDT_WORKLOAD_PROFILE_MIN_OPERATIONS) return;
+  const allowSparseActorProfile = stats.actors.size >= 3 && stats.multiActorUpdates !== 0;
+  if (stats.updates < CRDT_WORKLOAD_PROFILE_MIN_UPDATES && !allowSparseActorProfile) return;
+  maybeStoreCrdtWorkloadProfile(state, stats, 'text-heavy', stats.textOps);
+  maybeStoreCrdtWorkloadProfile(state, stats, 'grid-like', stats.gridSetOps);
+  maybeStoreCrdtWorkloadProfile(state, stats, 'tree-move-heavy', stats.treeOps + stats.treeMoveOps);
+  maybeStoreCrdtWorkloadProfile(state, stats, 'rich-text-mark-heavy', stats.richTextOps);
+  maybeStoreCrdtWorkloadProfile(
+    state,
+    stats,
+    'sparse-actor',
+    stats.actors.size >= 3 ? stats.sparseActorGaps + stats.multiActorUpdates * 2 + stats.actors.size : 0
+  );
+  if (state.workloadProfiles.size === 0 && stats.operations >= CRDT_WORKLOAD_PROFILE_MIN_OPERATIONS * 2) {
+    maybeStoreCrdtWorkloadProfile(state, stats, 'mixed', stats.operations);
+  }
+}
+
+function maybeStoreCrdtWorkloadProfile(
+  state: CrdtAdaptiveProfileState,
+  stats: CrdtWorkloadProfileStats,
+  workload: CrdtWorkloadFamily,
+  score: number
+): void {
+  if (score <= 0) return;
+  const ratio = score / Math.max(1, stats.operations);
+  const accepted =
+    workload === 'mixed' ||
+    (workload === 'sparse-actor' ? score >= 4 : score >= CRDT_WORKLOAD_PROFILE_MIN_OPERATIONS && ratio >= 0.35);
+  if (!accepted) return;
+  state.workloadProfiles.set(workload, {
+    workload,
+    update: defaultCrdtWorkloadUpdateStrategy(workload),
+    updates: stats.updates,
+    operations: stats.operations,
+    actors: stats.actors.size,
+    paths: topCrdtWorkloadPaths(stats),
+    score,
+    textOps: stats.textOps,
+    setOps: stats.setOps,
+    treeOps: stats.treeOps,
+    richTextOps: stats.richTextOps,
+    sparseActorGaps: stats.sparseActorGaps
+  });
+}
+
+function defaultCrdtWorkloadUpdateStrategy(workload: CrdtWorkloadFamily): CrdtUpdateCodecStrategy {
+  return workload === 'text-heavy' ? 'columnar-text' : workload === 'mixed' ? 'auto' : 'binary';
+}
+
+function readCrdtProfileStateUpdateStrategy(state: CrdtAdaptiveProfileState): CrdtUpdateCodecStrategy {
+  const planned = readCrdtProfilePlansUpdateStrategy(state.plans);
+  if (planned !== undefined && planned !== 'auto') return planned;
+  const best = chooseCrdtWorkloadProfile(state.workloadProfiles);
+  return best === undefined ? 'auto' : best.update;
+}
+
+function readCrdtProfileUpdateStrategy(profile?: CrdtProfile | null): CrdtUpdateCodecStrategy {
+  if (profile === undefined || profile === null) return 'auto';
+  const cached = crdtProfileStrategyCache.get(profile);
+  if (cached !== undefined) return cached;
+  const normalized = readCrdtProfile(profile);
+  const planned = readCrdtProfilePlansUpdateStrategy(normalized.plans);
+  if (planned !== undefined && planned !== 'auto') {
+    crdtProfileStrategyCache.set(profile, planned);
+    return planned;
+  }
+  const best = chooseCrdtWorkloadProfile(normalized.workloadProfiles);
+  const strategy = best === undefined ? 'auto' : best.update;
+  crdtProfileStrategyCache.set(profile, strategy);
+  return strategy;
+}
+
+function readCrdtProfilePlansUpdateStrategy(plans: ProfilePlans | undefined): CrdtUpdateCodecStrategy | undefined {
+  if (plans === undefined) return undefined;
+  return plans.crdt && plans.crdt.update !== undefined
+    ? plans.crdt.update
+    : plans.codec && plans.codec.crdt !== undefined
+      ? plans.codec.crdt
+      : undefined;
+}
+
+function chooseCrdtWorkloadProfile(
+  profiles: ReadonlyMap<CrdtWorkloadFamily, CrdtWorkloadProfilePlan>
+): CrdtWorkloadProfilePlan | undefined {
+  let best: CrdtWorkloadProfilePlan | undefined;
+  profiles.forEach((profile) => {
+    if (profile.update === 'auto') return;
+    if (
+      best === undefined ||
+      profile.score > best.score ||
+      (profile.score === best.score && profile.operations > best.operations)
+    ) {
+      best = profile;
+    }
+  });
+  return best;
+}
+
+function noteCrdtWorkloadPath(stats: CrdtWorkloadProfileStats, path: JsonPath, count: number): void {
+  const key = pathKey(path);
+  const current = stats.pathHits.get(key);
+  if (current === undefined) {
+    stats.pathHits.set(key, { path: path.slice(), count });
+  } else {
+    current.count += count;
+  }
+}
+
+function topCrdtWorkloadPaths(stats: CrdtWorkloadProfileStats): JsonPath[] {
+  const entries = Array.from(stats.pathHits.values());
+  entries.sort((left, right) => {
+    const diff = right.count - left.count;
+    return diff !== 0 ? diff : compareProfilePath(left.path, right.path);
+  });
+  return entries.slice(0, CRDT_WORKLOAD_PROFILE_MAX_PATHS).map((entry) => entry.path.slice());
+}
+
+function isGridLikeSetOperation(op: CrdtOperation): boolean {
+  if (op.type !== 'set' && op.type !== 'mapSetRun') return false;
+  const path = op.path;
+  let numericLike = false;
+  for (let i = 0, length = path.length; i < length; i++) {
+    const segment = path[i];
+    if (typeof segment === 'number') numericLike = true;
+    else if (looksLikeGridSegment(segment)) numericLike = true;
+  }
+  return numericLike && (op.type === 'mapSetRun' || isScalarJsonValue(op.value));
+}
+
+function looksLikeGridSegment(value: string): boolean {
+  if (value.length < 2) return false;
+  const first = value.charCodeAt(0);
+  if (first !== 0x72 && first !== 0x63 && first !== 0x6b) return false; // r/c/k
+  for (let i = 1, length = value.length; i < length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x30 || code > 0x39) return false;
+  }
+  return true;
+}
+
+function isScalarJsonValue(value: JsonValue): boolean {
+  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+function isRichTextSidecarOperation(op: CrdtOperation): boolean {
+  const path = op.path;
+  if (path.length === 0) return false;
+  const last = path[path.length - 1];
+  if (last === 'spans' || last === 'embeds' || last === 'blocks') return true;
+  if (path.length >= 2 && path[path.length - 2] === 'spans') return true;
+  if (op.type === 'set' && isRichTextSpanLikeValue(op.value)) return true;
+  if ((op.type === 'listInsert' || op.type === 'listRun') && op.values.some(isRichTextSpanLikeValue)) return true;
+  return false;
+}
+
+function isRichTextSpanLikeValue(value: JsonValue): boolean {
+  return value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    isJsonObject(value) &&
+    (value.attributes !== undefined || value.anchor !== undefined || value.start !== undefined || value.end !== undefined);
+}
+
+function readCrdtWorkloadFamily(value: unknown, name: string): CrdtWorkloadFamily {
+  if (
+    value !== 'text-heavy' &&
+    value !== 'grid-like' &&
+    value !== 'tree-move-heavy' &&
+    value !== 'rich-text-mark-heavy' &&
+    value !== 'sparse-actor' &&
+    value !== 'mixed'
+  ) {
+    throw new TypeError(name + ' is invalid');
+  }
+  return value;
+}
+
+function readCrdtUpdateCodecStrategy(value: unknown, name: string): CrdtUpdateCodecStrategy {
+  if (value !== 'auto' && value !== 'json' && value !== 'binary' && value !== 'columnar-text') {
+    throw new TypeError(name + ' is invalid');
+  }
+  return value;
 }
 
 function readCrdtProfilePath(path: JsonPath | undefined, name: string): JsonPath {
@@ -6427,6 +6909,16 @@ function readCrdtProfilePath(path: JsonPath | undefined, name: string): JsonPath
       throw new TypeError(name + ' segments must be strings or numbers');
     }
     out[i] = segment;
+  }
+  return out;
+}
+
+function readOptionalCrdtProfilePaths(paths: JsonPath[] | undefined, name: string): JsonPath[] {
+  if (paths === undefined) return [];
+  if (!Array.isArray(paths)) throw new TypeError(name + ' must be an array');
+  const out = new Array<JsonPath>(paths.length);
+  for (let i = 0, length = paths.length; i < length; i++) {
+    out[i] = readCrdtProfilePath(paths[i], name + '[' + i + ']');
   }
   return out;
 }
@@ -6769,9 +7261,10 @@ class FrontierCrdtDocument implements CrdtDocument {
 	          if (textAppend !== null) return textAppend;
 	          const textDirty = this.createReadyTextDirtyApplication([op]);
 	          if (textDirty !== null) {
-	            const updateResult = encodedInput === null ? encodeTrustedCrdtUpdate(update) : encodedInput;
+	            const updateResult = encodedInput === null ? this.encodeTrustedUpdate(update) : encodedInput;
 		            this.addOperation(op);
 		            this.recordCommitMetadataForUpdate([op], update);
+            this.observeCrdtOperations([op]);
 	            this.catchUpLocalSeq(update);
 	            this.noteDirectTextDirtyOperationsApplied([op], textDirty.spans, textDirty.sequences);
 	            return createCrdtCommitResult(
@@ -6789,11 +7282,12 @@ class FrontierCrdtDocument implements CrdtDocument {
 	          if (directPatch !== null) {
             this.addOperation(op);
             this.recordCommitMetadataForUpdate([op], update);
+            this.observeCrdtOperations([op]);
             this.catchUpLocalSeq(update);
             this.viewValue = applyDirectPatchToView(this.viewValue, directPatch);
             this.noteDirectOperationApplied(op);
             return createStaticCrdtCommitResult(
-              encodedInput === null ? encodeTrustedCrdtUpdate(update) : encodedInput,
+              encodedInput === null ? this.encodeTrustedUpdate(update) : encodedInput,
               directPatch,
               this.getReadyHeadsCached(),
               this.getStateVectorCached(),
@@ -6820,7 +7314,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     }
     if (!changed) {
       return createStaticCrdtCommitResult(
-        encodedInput === null ? encodeTrustedCrdtUpdate(update) : encodedInput,
+        encodedInput === null ? this.encodeTrustedUpdate(update) : encodedInput,
         [],
         this.getReadyHeadsCached(),
         this.getStateVectorCached()
@@ -6859,10 +7353,14 @@ class FrontierCrdtDocument implements CrdtDocument {
       }
     }
 
+    const readyIdsBeforeFallback = textDirty === null && directPatch === null
+      ? this.getReadyOperationIdsForRead()
+      : null;
     for (let i = 0, length = newOps.length; i < length; i++) {
       this.addOperation(newOps[i]);
     }
     this.recordCommitMetadataForUpdate(newOps, update);
+    this.observeCrdtOperations(newOps);
     this.catchUpLocalSeq(update);
 	    let viewPatch: Patch | (() => Patch);
 	    if (textDirty !== null) {
@@ -6872,6 +7370,10 @@ class FrontierCrdtDocument implements CrdtDocument {
 	      viewPatch = directPatch;
 	      this.viewValue = applyDirectPatchToView(this.viewValue, viewPatch);
 	      this.noteDirectOperationsApplied(update.ops);
+    } else if (readyIdsBeforeFallback !== null && !operationsIntroduceReadyOperation(newOps, readyIdsBeforeFallback)) {
+      this.allReadyCache = false;
+      this.stateVectorCache = null;
+      viewPatch = [];
     } else {
       this.readyHeadsCache = null;
       this.allReadyCache = null;
@@ -6882,7 +7384,7 @@ class FrontierCrdtDocument implements CrdtDocument {
       viewPatch = diff(before, this.viewValue);
     }
 	    return createCrdtCommitResult(
-	      () => encodedInput === null ? encodeTrustedCrdtUpdate(update) : encodedInput,
+	      () => encodedInput === null ? this.encodeTrustedUpdate(update) : encodedInput,
 	      viewPatch,
 	      this.getReadyHeadsCached(),
 	      this.getStateVectorCached(),
@@ -6913,6 +7415,7 @@ class FrontierCrdtDocument implements CrdtDocument {
 
     this.nativeTextLog = log;
     this.noteActorRange(parsed.actor, firstSeq, lastSeq);
+    observeCrdtNativeTextLogShape(this.crdtProfile, parsed.actor, log.path, firstSeq, lastSeq);
     if (parsed.actor === this.actorId && lastSeq >= this.nextSeq) this.nextSeq = lastSeq + 1;
     this.readyHeadsCache = [`${parsed.actor}:${lastSeq}`];
     this.allReadyCache = true;
@@ -6950,6 +7453,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     if (!appendNativeTextLogSegment(log, segment)) return null;
 
     this.noteActorRange(parsed.actor, firstSeq, lastSeq);
+    observeCrdtNativeTextLogShape(this.crdtProfile, parsed.actor, segment.path, firstSeq, lastSeq);
     if (parsed.actor === this.actorId && lastSeq >= this.nextSeq) this.nextSeq = lastSeq + 1;
     this.readyHeadsCache = [`${parsed.actor}:${lastSeq}`];
     this.allReadyCache = true;
@@ -6978,7 +7482,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     }
     this.flushNativeTextLogToOperations();
     const ops = this.getOperationsSince(stateVector);
-    return encodeTrustedCrdtUpdate({
+    return this.encodeTrustedUpdate({
       actor: this.actorId,
       seq: this.nextSeq - 1,
       deps: this.getReadyHeadsCached(),
@@ -7005,7 +7509,7 @@ class FrontierCrdtDocument implements CrdtDocument {
       return this.exportUpdate(fromVersion as CrdtStateVector | null | undefined);
     }
     const ops = this.changesBetween(fromVersion ?? null, toVersion ?? null);
-    return encodeTrustedCrdtUpdate({
+    return this.encodeTrustedUpdate({
       actor: this.actorId,
       seq: ops.length === 0 ? this.nextSeq - 1 : maxOperationSeq(ops),
       deps: ops.length === 0 ? this.getReadyHeadsCached() : getHeadsFromOperationList(ops),
@@ -7154,6 +7658,93 @@ class FrontierCrdtDocument implements CrdtDocument {
     if (leftInRight) return 'before';
     if (rightInLeft) return 'after';
     return 'concurrent';
+  }
+
+  captureFrame(options?: CrdtFrameCaptureOptions): CrdtFrameReference {
+    const markName = options && options.mark !== undefined ? validateCrdtVersionMarkName(options.mark) : undefined;
+    const mark = markName === undefined ? undefined : this.requireVersionMark(markName);
+    const hasVersion = options !== undefined && Object.prototype.hasOwnProperty.call(options, 'version');
+    const version = mark !== undefined
+      ? mark.version
+      : hasVersion
+        ? options!.version ?? null
+        : null;
+    const info = this.inspectVersion(version);
+    const frame: CrdtFrameReference = {
+      version: cloneCrdtVersion(info.version),
+      heads: info.heads.slice(),
+      stateVector: cloneStateVector(info.stateVector)
+    };
+    if (markName !== undefined) frame.mark = markName;
+    if (options && options.metadata !== undefined) frame.metadata = cloneJson(options.metadata) as JsonObject;
+
+    const paths = options && options.paths !== undefined
+      ? normalizeFramePaths(options.paths, options.maxPaths)
+      : [];
+    if (paths.length !== 0) {
+      const includeValues = !(options && options.includeValues === false);
+      const view = includeValues ? this.viewAt(info.version) : undefined;
+      frame.paths = new Array<CrdtFramePathEntry>(paths.length);
+      for (let i = 0, length = paths.length; i < length; i++) {
+        const path = paths[i];
+        const entry: CrdtFramePathEntry = {
+          path: path.slice(),
+          exists: false,
+          valueCaptured: view !== undefined
+        };
+        if (view !== undefined) {
+          const value = valueAtPath(view, path);
+          entry.exists = value !== undefined;
+          if (value !== undefined) entry.value = cloneJson(value);
+        }
+        frame.paths[i] = entry;
+      }
+    }
+    return frame;
+  }
+
+  evaluateFrame(frame: CrdtFrameReference, options?: CrdtFrameEvaluationOptions): CrdtFrameEvaluation {
+    validateCrdtFrameReference(frame);
+    const mode = readCrdtFrameEvaluationMode(frame, options);
+    const relation = this.compareVersions(frame.version, null);
+    const checkedPaths = normalizeEvaluationFramePaths(frame, options);
+    if (mode === 'version' || checkedPaths.length === 0) {
+      return {
+        ok: relation === 'equal',
+        relation,
+        mode: 'version',
+        checkedPaths: [],
+        changedPaths: [],
+        conflictingPaths: [],
+        reason: relation === 'equal' ? 'equal' : relation === 'after' ? 'future-version' : 'version-changed'
+      };
+    }
+
+    if (relation === 'after') {
+      return {
+        ok: false,
+        relation,
+        mode,
+        checkedPaths,
+        changedPaths: [],
+        conflictingPaths: checkedPaths.map((path) => path.slice()),
+        reason: 'future-version'
+      };
+    }
+
+    const changedPaths = this.getChangedPathsSinceFrame(frame.version);
+    const conflictingPaths = collectOverlappingFramePaths(checkedPaths, changedPaths);
+    const valueConflicts = collectFrameValueConflicts(frame, checkedPaths, this.toJSON());
+    appendUniquePaths(conflictingPaths, valueConflicts);
+    return {
+      ok: conflictingPaths.length === 0,
+      relation,
+      mode,
+      checkedPaths,
+      changedPaths,
+      conflictingPaths,
+      reason: conflictingPaths.length === 0 ? 'equal' : valueConflicts.length !== 0 ? 'path-value-changed' : 'path-overlap'
+    };
   }
 
   snapshot(options?: CrdtSnapshotOptions): CrdtSnapshot {
@@ -7315,6 +7906,14 @@ class FrontierCrdtDocument implements CrdtDocument {
   loadProfile(profile?: CrdtProfile | null): void {
     this.crdtProfile = createCrdtAdaptiveProfileState({ profile });
     this.applyTextProfilesToCachedSequences();
+  }
+
+  private encodeTrustedUpdate(update: CrdtUpdate): Uint8Array {
+    return encodeTrustedCrdtUpdateWithStrategy(update, readCrdtProfileStateUpdateStrategy(this.crdtProfile));
+  }
+
+  private observeCrdtOperations(ops: readonly CrdtOperation[]): void {
+    observeCrdtWorkloadShape(this.crdtProfile, ops);
   }
 
   _createOperation(type: CrdtOperation['type'], path: JsonPath, payload: Record<string, unknown>): CrdtOperation {
@@ -8723,7 +9322,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     const hasTextDirtySpans = !!(textDirtySpans && textDirtySpans.length !== 0);
     if (!hasTextDirtySpans) this.flushTextValueCache();
     if (ops.length === 0) {
-      return this.createLocalCommitResult(() => encodeTrustedCrdtUpdate({
+      return this.createLocalCommitResult(() => this.encodeTrustedUpdate({
           actor: this.actorId,
           seq: this.nextSeq - 1,
           deps: this.getReadyHeadsCached(),
@@ -8743,6 +9342,7 @@ class FrontierCrdtDocument implements CrdtDocument {
       }
     }
     if (ops.length > 1) ops = compactCrdtOperationRuns(ops);
+    this.observeCrdtOperations(ops);
     if (hasTextDirtySpans && this.crdtProfile.enabled) observeCrdtTextTransactionShape(this.crdtProfile, textDirtySpans);
 
 	    let before = this.viewValue;
@@ -8794,7 +9394,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     };
     this.recordCommitMetadataForOps(ops, metadata);
     return this.createLocalCommitResult(
-      () => metadata === undefined && ops.length === 1 && operationSeqSpan(ops[0]) === 1 ? this.encodeSingleLocalUpdate(ops[0]) : encodeTrustedCrdtUpdate(update),
+      () => metadata === undefined && ops.length === 1 && operationSeqSpan(ops[0]) === 1 ? this.encodeSingleLocalUpdate(ops[0]) : this.encodeTrustedUpdate(update),
       viewPatch,
       this.getReadyHeadsCached(),
       this.getStateVectorCached(),
@@ -8811,6 +9411,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     compactRuns = true
   ): CrdtCommitResult {
     if (compactRuns && ops.length > 1) ops = compactCrdtOperationRuns(ops);
+    this.observeCrdtOperations(ops);
     if (this.crdtProfile.enabled) observeCrdtTextTransactionShape(this.crdtProfile, textDirtySpans);
     this.addLocalOperations(ops);
     this.noteDirectTextDirtyOperationsApplied(ops, textDirtySpans, textDirtySequences, localCausalRun);
@@ -8822,7 +9423,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     };
     const heads = localCausalRun ? [this.actorIdPrefix + (this.nextSeq - 1)] : this.getReadyHeadsCached();
     return this.createLocalCommitResult(
-      () => ops.length === 1 && operationSeqSpan(ops[0]) === 1 ? this.encodeSingleLocalUpdate(ops[0]) : encodeTrustedCrdtUpdate(update),
+      () => ops.length === 1 && operationSeqSpan(ops[0]) === 1 ? this.encodeSingleLocalUpdate(ops[0]) : this.encodeTrustedUpdate(update),
       viewPatch,
       heads,
       this.getStateVectorCached()
@@ -8952,7 +9553,7 @@ class FrontierCrdtDocument implements CrdtDocument {
     this.catchUpLocalSeq(update);
     this.noteReadyTextAppendApplied(op, key, insertIndex, count);
     return createCrdtCommitResult(
-      () => encodedInput === null ? encodeTrustedCrdtUpdate(update) : encodedInput,
+      () => encodedInput === null ? this.encodeTrustedUpdate(update) : encodedInput,
       viewPatch,
       this.getReadyHeadsCached(),
       this.getStateVectorCached(),
@@ -9037,6 +9638,7 @@ class FrontierCrdtDocument implements CrdtDocument {
 
   private commitLocalBatchWithDirectPatch(ops: CrdtOperation[], viewPatch: Patch, encodedPath?: string): CrdtCommitResult {
     this.addLocalOperations(ops);
+    this.observeCrdtOperations(ops);
     this.viewValue = applyDirectPatchToView(this.viewValue, viewPatch);
     this.noteDirectOperationsApplied(ops);
     const update = {
@@ -9046,7 +9648,7 @@ class FrontierCrdtDocument implements CrdtDocument {
       ops
     };
     return this.createLocalCommitResult(
-      () => encodeTrustedCrdtUpdate(update),
+      () => this.encodeTrustedUpdate(update),
       viewPatch,
       this.getReadyHeadsCached(),
       this.getStateVectorCached()
@@ -9092,6 +9694,7 @@ class FrontierCrdtDocument implements CrdtDocument {
   }
 
   private finishLocalDirectCommitAfterCacheUpdate(op: CrdtOperation, viewPatch: Patch | (() => Patch), encodedPath?: string): CrdtCommitResult {
+    this.observeCrdtOperations([op]);
     const heads = [operationHeadId(op)];
     const stateVector = this.getDirectCommitStateVector(op);
     if (this.observedLocalUpdateReads !== 0) {
@@ -9259,6 +9862,20 @@ class FrontierCrdtDocument implements CrdtDocument {
     const ids = new Set<string>();
     for (let i = 0, length = ops.length; i < length; i++) markOperationReadyIds(ids, ops[i]);
     return ids;
+  }
+
+  private getChangedPathsSinceFrame(version: CrdtVersion): JsonPath[] {
+    const frameIds = this.getOperationIdsAtVersion(version);
+    const changed: JsonPath[] = [];
+    const seen = new Set<string>();
+    const ops = this.getReadyOperationsForRead();
+    for (let i = 0, length = ops.length; i < length; i++) {
+      const op = ops[i];
+      if (operationIdsIntersectSet(op, frameIds)) continue;
+      addChangedOperationPath(changed, seen, op.path);
+    }
+    changed.sort(comparePaths);
+    return changed;
   }
 
   private getHeadsForMetadataVersion(version?: CrdtVersion | CrdtOperationId | null): CrdtOperationId[] {
@@ -9934,7 +10551,7 @@ class FrontierCrdtDocument implements CrdtDocument {
       ? decodeCrdtUpdate(this.encodeNativeTextLogUpdate(log, 0, end)).ops.slice(start, end)
       : directOps;
     if (ops.length === 0) return EMPTY_UPDATE_BYTES;
-    return encodeTrustedCrdtUpdate({
+    return this.encodeTrustedUpdate({
       actor: log.actor,
       seq: operationEndSeq(ops[ops.length - 1]),
       deps: ops[0].deps,
@@ -10118,6 +10735,14 @@ class FrontierCrdtDocument implements CrdtDocument {
       return ops;
     }
     return getReadyOperationsFromList(this.operationLog);
+  }
+
+  private getReadyOperationIdsForRead(): Set<string> {
+    if (this.readyHeadsCache !== null && this.readyHeadsCache.length === 0) return new Set<string>();
+    const ready = new Set<string>();
+    const ops = this.allReadyCache === true ? this.operationLog : this.getReadyOperationsForRead();
+    for (let i = 0, length = ops.length; i < length; i++) markOperationReadyIds(ready, ops[i]);
+    return ready;
   }
 
   private getStateVectorCached(): CrdtStateVector {
@@ -10830,13 +11455,25 @@ class Transaction implements CrdtTransaction {
   }
 
   _listValuesSlice(path: JsonPath, index: number, count: number): JsonValue[] {
-    return this.doc._listValuesSlice(path, index, count);
+    if (!this.hasPendingValueDependency(path)) return this.doc._listValuesSlice(path, index, count);
+    const current = this._pendingValueAtPath(path);
+    if (!Array.isArray(current) || count <= 0 || index >= current.length) return [];
+    const start = Math.max(0, index);
+    const end = Math.min(current.length, start + count);
+    const values = new Array<JsonValue>(end - start);
+    for (let i = start; i < end; i++) values[i - start] = cloneJson(current[i]);
+    return values;
   }
 
   _treeValue(path: JsonPath): CrdtTreeNode[] {
     const ops = this.doc._readyOperationsSnapshot();
     for (let i = 0, length = this.ops.length; i < length; i++) ops[ops.length] = this.ops[i];
     return materializeTree(ops, path);
+  }
+
+  _binaryValue(path: JsonPath): Uint8Array | undefined {
+    if (!this.hasPendingValueDependency(path)) return this.doc._binaryValue(path);
+    return binaryJsonToBytes(this._pendingValueAtPath(path));
   }
 
   _visibleTextElementIds(path: JsonPath): string[] {
@@ -10857,6 +11494,19 @@ class Transaction implements CrdtTransaction {
 
   _sequenceAppendState(path: JsonPath, kind: 'list' | 'text'): SequenceAppendState | null {
     return this.getSequenceAppendState(path, kind);
+  }
+
+  private _pendingValueAtPath(path: JsonPath): JsonValue | undefined {
+    const ops = this.doc._readyOperationsSnapshot();
+    for (let i = 0, length = this.ops.length; i < length; i++) ops[ops.length] = this.ops[i];
+    return valueAtPath(materialize(ops), path);
+  }
+
+  private hasPendingValueDependency(path: JsonPath): boolean {
+    for (let i = 0, length = this.ops.length; i < length; i++) {
+      if (pathsOverlap(this.ops[i].path, path)) return true;
+    }
+    return false;
   }
 
   private getVisibleElementIds(path: JsonPath, kind: 'list' | 'text'): string[] {
@@ -11550,7 +12200,7 @@ class TransactionBinaryHandle implements CrdtBinaryHandle {
   }
 
   get(): Uint8Array | undefined {
-    return undefined;
+    return this.tx._binaryValue(this.path);
   }
 
   delete(): CrdtCommitResult {
@@ -13168,6 +13818,24 @@ function operationsBecomeReady(ops: CrdtOperation[], readyHeads: string[]): bool
   return true;
 }
 
+function operationsIntroduceReadyOperation(ops: readonly CrdtOperation[], ready: Set<string>): boolean {
+  if (ops.length === 0) return false;
+  let introduced = false;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0, length = ops.length; i < length; i++) {
+      const op = ops[i];
+      if (ready.has(operationHeadId(op))) continue;
+      if (!operationDepsReady(op.deps, ready)) continue;
+      markOperationReadyIds(ready, op);
+      introduced = true;
+      changed = true;
+    }
+  }
+  return introduced;
+}
+
 function getHeadsAfterDirectOperations(previousHeads: string[], ops: CrdtOperation[]): string[] {
   if (ops.length !== 0 && sameOperationIdSet(ops[0].deps, previousHeads) && isSingleCausalRun(ops)) {
     return [operationHeadId(ops[ops.length - 1])];
@@ -13735,6 +14403,144 @@ function comparePaths(left: JsonPath, right: JsonPath): number {
     return leftString < rightString ? -1 : leftString > rightString ? 1 : 0;
   }
   return left.length - right.length;
+}
+
+function pathsOverlap(left: JsonPath, right: JsonPath): boolean {
+  const length = Math.min(left.length, right.length);
+  for (let i = 0; i < length; i++) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function normalizeFramePaths(paths: readonly WatchPath[], maxPaths: number | undefined): JsonPath[] {
+  const limit = readCrdtFrameMaxPaths(maxPaths);
+  const out: JsonPath[] = [];
+  const seen = new Set<string>();
+  for (let i = 0, length = paths.length; i < length; i++) {
+    const path = normalizeCrdtPath(paths[i]);
+    addUniqueFramePath(out, seen, path, limit);
+  }
+  return out;
+}
+
+function normalizeEvaluationFramePaths(
+  frame: CrdtFrameReference,
+  options: CrdtFrameEvaluationOptions | undefined
+): JsonPath[] {
+  if (options && options.paths !== undefined) return normalizeFramePaths(options.paths, undefined);
+  if (frame.paths === undefined) return [];
+  const out = new Array<JsonPath>(frame.paths.length);
+  for (let i = 0, length = frame.paths.length; i < length; i++) out[i] = frame.paths[i].path.slice();
+  return out;
+}
+
+function readCrdtFrameMaxPaths(maxPaths: number | undefined): number {
+  if (maxPaths === undefined) return 64;
+  if (!Number.isSafeInteger(maxPaths) || maxPaths < 1) {
+    throw new RangeError('CRDT frame maxPaths must be a positive safe integer');
+  }
+  return maxPaths;
+}
+
+function addUniqueFramePath(out: JsonPath[], seen: Set<string>, path: JsonPath, limit: number): void {
+  const key = pathKey(path);
+  if (seen.has(key)) return;
+  if (out.length >= limit) throw new RangeError('CRDT frame path count exceeds maxPaths');
+  seen.add(key);
+  out[out.length] = path;
+}
+
+function readCrdtFrameEvaluationMode(
+  frame: CrdtFrameReference,
+  options: CrdtFrameEvaluationOptions | undefined
+): CrdtFrameEvaluationMode {
+  if (options && options.mode !== undefined) {
+    if (options.mode !== 'version' && options.mode !== 'paths') throw new TypeError('invalid CRDT frame evaluation mode');
+    return options.mode;
+  }
+  return frame.paths !== undefined && frame.paths.length !== 0 ? 'paths' : 'version';
+}
+
+function collectOverlappingFramePaths(checkedPaths: readonly JsonPath[], changedPaths: readonly JsonPath[]): JsonPath[] {
+  const out: JsonPath[] = [];
+  const seen = new Set<string>();
+  for (let i = 0, checkedLength = checkedPaths.length; i < checkedLength; i++) {
+    const checked = checkedPaths[i];
+    for (let j = 0, changedLength = changedPaths.length; j < changedLength; j++) {
+      if (pathsOverlap(checked, changedPaths[j])) {
+        addUniquePath(out, seen, checked);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function collectFrameValueConflicts(
+  frame: CrdtFrameReference,
+  checkedPaths: readonly JsonPath[],
+  currentView: JsonValue
+): JsonPath[] {
+  if (frame.paths === undefined || frame.paths.length === 0) return [];
+  const entriesByPath = new Map<string, CrdtFramePathEntry>();
+  for (let i = 0, length = frame.paths.length; i < length; i++) entriesByPath.set(pathKey(frame.paths[i].path), frame.paths[i]);
+  const out: JsonPath[] = [];
+  const seen = new Set<string>();
+  for (let i = 0, length = checkedPaths.length; i < length; i++) {
+    const path = checkedPaths[i];
+    const entry = entriesByPath.get(pathKey(path));
+    if (entry === undefined || entry.valueCaptured === false) continue;
+    const current = valueAtPath(currentView, path);
+    const exists = current !== undefined;
+    if (exists !== entry.exists || (exists && !jsonValueEquals(current, entry.value))) addUniquePath(out, seen, path);
+  }
+  return out;
+}
+
+function appendUniquePaths(target: JsonPath[], paths: readonly JsonPath[]): void {
+  if (paths.length === 0) return;
+  const seen = new Set<string>();
+  for (let i = 0, length = target.length; i < length; i++) seen.add(pathKey(target[i]));
+  for (let i = 0, length = paths.length; i < length; i++) addUniquePath(target, seen, paths[i]);
+}
+
+function addChangedOperationPath(target: JsonPath[], seen: Set<string>, path: JsonPath): void {
+  addUniquePath(target, seen, path);
+}
+
+function addUniquePath(target: JsonPath[], seen: Set<string>, path: JsonPath): void {
+  const key = pathKey(path);
+  if (seen.has(key)) return;
+  seen.add(key);
+  target[target.length] = path.slice();
+}
+
+function jsonValueEquals(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let i = 0, length = left.length; i < length; i++) {
+      if (!jsonValueEquals(left[i], right[i])) return false;
+    }
+    return true;
+  }
+  if (isJsonObjectRecord(left) || isJsonObjectRecord(right)) {
+    if (!isJsonObjectRecord(left) || !isJsonObjectRecord(right)) return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (let i = 0, length = leftKeys.length; i < length; i++) {
+      const key = leftKeys[i];
+      if (!Object.prototype.hasOwnProperty.call(right, key) || !jsonValueEquals(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function materialize(ops: CrdtOperation[]): JsonValue {
@@ -14750,6 +15556,35 @@ function validateCrdtSnapshot(value: unknown): asserts value is CrdtSnapshot {
   if (!(snapshot.update instanceof Uint8Array)) throw new TypeError('invalid CRDT snapshot update');
   if (snapshot.metadata !== undefined) validateCrdtCommitMetadataEntries(snapshot.metadata);
   if (snapshot.view !== undefined) cloneJson(snapshot.view);
+}
+
+function validateCrdtFrameReference(value: unknown): asserts value is CrdtFrameReference {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('invalid CRDT frame');
+  }
+  const frame = value as CrdtFrameReference;
+  validateCrdtVersion(frame.version);
+  if (!Array.isArray(frame.heads)) throw new TypeError('invalid CRDT frame heads');
+  for (let i = 0, length = frame.heads.length; i < length; i++) {
+    if (typeof frame.heads[i] !== 'string' || tryParseOperationId(frame.heads[i]) === null) {
+      throw new TypeError('invalid CRDT frame head');
+    }
+  }
+  validateCrdtVersion(frame.stateVector);
+  if (Array.isArray(frame.stateVector)) throw new TypeError('invalid CRDT frame state vector');
+  if (frame.paths !== undefined) {
+    if (!Array.isArray(frame.paths)) throw new TypeError('invalid CRDT frame paths');
+    for (let i = 0, length = frame.paths.length; i < length; i++) {
+      const entry = frame.paths[i];
+      if (entry === null || typeof entry !== 'object' || !Array.isArray(entry.path) || typeof entry.exists !== 'boolean') {
+        throw new TypeError('invalid CRDT frame path');
+      }
+      if (entry.valueCaptured !== undefined && typeof entry.valueCaptured !== 'boolean') throw new TypeError('invalid CRDT frame path');
+      if (entry.value !== undefined) cloneJson(entry.value);
+    }
+  }
+  if (frame.mark !== undefined) validateCrdtVersionMarkName(frame.mark);
+  if (frame.metadata !== undefined) cloneJson(frame.metadata);
 }
 
 function validateCrdtCommitMetadataEntries(value: unknown): asserts value is CrdtCommitMetadataEntry[] {

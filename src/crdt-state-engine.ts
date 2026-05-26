@@ -14,6 +14,10 @@ import type {
   CrdtDocument,
   CrdtDocumentOptions,
   CrdtForkOptions,
+  CrdtFrameCaptureOptions,
+  CrdtFrameEvaluation,
+  CrdtFrameEvaluationOptions,
+  CrdtFrameReference,
   CrdtHistoryEntry,
   CrdtHistoryOptions,
   CrdtHistoryVisitor,
@@ -392,6 +396,14 @@ class FrontierCrdtStateEngine implements CrdtStateEngine {
 
   compareVersions(left?: CrdtVersion | null, right?: CrdtVersion | null): CrdtVersionRelation {
     return this.doc.compareVersions(left, right);
+  }
+
+  captureFrame(options?: CrdtFrameCaptureOptions): CrdtFrameReference {
+    return this.doc.captureFrame(options);
+  }
+
+  evaluateFrame(frame: CrdtFrameReference, options?: CrdtFrameEvaluationOptions): CrdtFrameEvaluation {
+    return this.doc.evaluateFrame(frame, options);
   }
 
   snapshot(options?: CrdtSnapshotOptions): CrdtSnapshot {

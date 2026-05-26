@@ -1,12 +1,14 @@
 import { cloneJson } from '@shapeshift-labs/frontier/clone';
 import {
   decodeCrdtUpdate,
-  encodeCrdtUpdate
+  encodeCrdtUpdate,
+  encodeCrdtUpdateWithProfile
 } from './crdt.js';
 
 export {
   decodeCrdtUpdate,
-  encodeCrdtUpdate
+  encodeCrdtUpdate,
+  encodeCrdtUpdateWithProfile
 };
 import type {
   CrdtActorId,
@@ -281,9 +283,13 @@ export function convertCrdtUpdate(
   const update = decodeCrdtUpdate(input);
   const format = readCrdtUpdateFormat(options);
   if (format === 'object') return cloneCrdtUpdate(update);
-  if (format === 'base64url') return encodeBase64urlBytes(encodeCrdtUpdate(update));
+  if (format === 'base64url') return encodeBase64urlBytes(options && options.profile !== undefined
+    ? encodeCrdtUpdateWithProfile(update, options.profile)
+    : encodeCrdtUpdate(update));
   if (format === 'json') return encodeJsonEnvelopeUpdate(update);
-  return encodeCrdtUpdate(update);
+  return options && options.profile !== undefined
+    ? encodeCrdtUpdateWithProfile(update, options.profile)
+    : encodeCrdtUpdate(update);
 }
 
 export function encodeCrdtUpdateBase64url(input: CrdtUpdateInput): string {
