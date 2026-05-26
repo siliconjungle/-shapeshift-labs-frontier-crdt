@@ -1,11 +1,13 @@
 import assert from 'node:assert';
 import { createCrdtDocument } from '../dist/index.js';
+import { createCrdtBranch } from '../dist/crdt-branch.js';
 import { createCrdtUndoManager } from '../dist/crdt-undo.js';
 import {
   decodeCrdtStateVector,
   decodeCrdtStateVectorBase64url,
   decodeCrdtUpdate,
   decodeCrdtUpdateBase64url,
+  encodeCrdtUpdate,
   diffCrdtUpdate,
   filterCrdtUpdate,
   getCrdtUpdateActorRanges,
@@ -24,6 +26,11 @@ testConflictIntrospectionAndResolution();
 testCheckoutForkViewAtAndChanges();
 testPartialDuplicateAndFilteredUpdates();
 testUndoRefusesOverlappingRemoteAdvancement();
+testUndoAllowsNonOverlappingRemoteAdvancement();
+testConcurrentContainerMatrix();
+testRichTextSidecarConcurrentMatrix();
+testBranchViewAtAndMetadataMatrix();
+testPartialSyncPermutationMatrix();
 testMalformedUpdateValidation();
 testConcurrentRandomizedReplay(cases, rng);
 
@@ -155,6 +162,219 @@ function testUndoRefusesOverlappingRemoteAdvancement() {
   assert.deepStrictEqual(local.toJSON(), { body: 'Xabc' });
 }
 
+function testUndoAllowsNonOverlappingRemoteAdvancement() {
+  const local = createCrdtDocument({ actorId: 'hard-undo-safe-local' });
+  const remote = createCrdtDocument({ actorId: 'hard-undo-safe-remote' });
+  const undo = createCrdtUndoManager(local, { trackedOrigins: ['typing', 'title'] });
+
+  undo.capture(() => {
+    local.text('/body').insert(0, 'abc');
+  }, { origin: 'typing', metadata: { source: 'keyboard' } });
+  undo.capture(() => {
+    local.set('/title', 'draft');
+  }, { origin: 'title' });
+
+  remote.applyUpdate(local.exportUpdate());
+  remote.map('/meta').set('remote', true);
+  local.applyUpdate(remote.exportUpdate(local.getStateVector()));
+
+  assert.deepStrictEqual(local.toJSON(), { body: 'abc', title: 'draft', meta: { remote: true } });
+  undo.undo({ origin: 'typing' });
+  assert.deepStrictEqual(local.toJSON(), { title: 'draft', meta: { remote: true } });
+  assert.strictEqual(undo.canRedo(), true);
+  undo.redo({ predicate: (entry) => entry.metadata?.source === 'keyboard' });
+  assert.deepStrictEqual(local.toJSON(), { body: 'abc', title: 'draft', meta: { remote: true } });
+}
+
+function testConcurrentContainerMatrix() {
+  const base = createCrdtDocument({ actorId: 'hard-container-base' });
+  base.change((tx) => {
+    tx.set('/title', 'base');
+    tx.map('/meta').set('seed', true);
+    tx.list('/items').insert(0, [{ id: 'base-a' }, { id: 'base-b' }, { id: 'base-c' }]);
+    tx.text('/body').insert(0, 'abcdef');
+  });
+  const baseUpdate = base.exportUpdate();
+  const peers = ['a', 'b', 'c'].map((id) => {
+    const peer = createCrdtDocument({ actorId: 'hard-container-' + id });
+    peer.applyUpdate(baseUpdate);
+    return peer;
+  });
+
+  peers[0].change((tx) => {
+    tx.map('/meta').set('left', 1);
+    tx.map('/meta').set('shared', 'left');
+    tx.list('/items').insert(1, { id: 'left-insert' });
+    tx.list('/items').move(0, 2, 1);
+    tx.text('/body').splice(1, 2, 'XY');
+  });
+  peers[1].change((tx) => {
+    tx.map('/meta').set('right', 2);
+    tx.map('/meta').set('shared', 'right');
+    tx.list('/items').delete(2, 1);
+    tx.list('/items').insert(0, { id: 'right-insert' });
+    tx.text('/body').insert(3, 'zz');
+  });
+  peers[2].change((tx) => {
+    tx.map('/meta').delete('seed');
+    tx.counter('/count').increment(4);
+    tx.list('/items').insert(3, { id: 'third-insert' });
+    tx.text('/body').delete(4, 1);
+  });
+
+  const updates = peers.map((peer) => peer.exportUpdate(base.getStateVector()));
+  const replayA = createCrdtDocument({ actorId: 'hard-container-replay-a' });
+  const replayB = createCrdtDocument({ actorId: 'hard-container-replay-b' });
+  const replayC = createCrdtDocument({ actorId: 'hard-container-replay-c' });
+  for (const replay of [replayA, replayB, replayC]) replay.applyUpdate(baseUpdate);
+  for (const update of updates) replayA.applyUpdate(update);
+  for (const update of [updates[2], updates[0], updates[1]]) replayB.applyUpdate(update);
+  replayC.applyUpdate(mergeCrdtUpdates([updates[1], updates[0], updates[2], updates[1]]));
+
+  assert.deepStrictEqual(replayB.toJSON(), replayA.toJSON());
+  assert.deepStrictEqual(replayC.toJSON(), replayA.toJSON());
+  assert.deepStrictEqual(replayA.toJSON().meta.left, 1);
+  assert.deepStrictEqual(replayA.toJSON().meta.right, 2);
+  assert.strictEqual(replayA.toJSON().meta.seed, undefined);
+  assert.strictEqual(replayA.getConflict('/meta/shared')?.values.length, 2);
+  const summary = replayA.map('/meta').getConflictSummary('shared');
+  assert.ok(summary);
+  assert.deepStrictEqual(summary.actors, ['hard-container-a', 'hard-container-b']);
+
+  const loser = replayA.getConflict('/meta/shared')?.losers[0];
+  assert.ok(loser);
+  replayA.resolveConflict('/meta/shared', loser);
+  replayB.applyUpdate(replayA.exportUpdate(replayB.getStateVector()));
+  assert.deepStrictEqual(replayB.toJSON(), replayA.toJSON());
+}
+
+function testRichTextSidecarConcurrentMatrix() {
+  const base = createCrdtDocument({ actorId: 'hard-rich-base' });
+  base.richText('/doc').fromDelta([
+    { insert: 'hello world\n' },
+    { insert: { image: 'seed.png' }, attributes: { alt: 'seed' } }
+  ]);
+  const baseUpdate = base.exportUpdate();
+  const peers = ['a', 'b', 'c'].map((id) => {
+    const peer = createCrdtDocument({ actorId: 'hard-rich-' + id });
+    peer.applyUpdate(baseUpdate);
+    return peer;
+  });
+
+  peers[0].richText('/doc').format(0, 5, { bold: true }, { expand: 'after', id: 'bold-hello' });
+  peers[1].richText('/doc').format(6, 5, { italic: true }, { expand: 'none', id: 'italic-world' });
+  peers[2].richText('/doc').insert(5, '!', { color: 'red' });
+  peers[2].richText('/doc').formatBlock(0, { heading: 2 });
+  peers[2].richText('/doc').updateEmbed(
+    peers[2].richText('/doc').getEmbeds()[0].index,
+    { image: 'updated.png' },
+    { alt: 'updated' }
+  );
+
+  const updates = peers.map((peer) => peer.exportUpdate(base.getStateVector()));
+  const mergedOne = replayRichText(baseUpdate, updates);
+  const mergedTwo = replayRichText(baseUpdate, [updates[2], updates[1], updates[0], updates[2]]);
+  assert.deepStrictEqual(mergedTwo.richText('/doc').toDelta(), mergedOne.richText('/doc').toDelta());
+  assert.deepStrictEqual(mergedTwo.richText('/doc').value(), mergedOne.richText('/doc').value());
+
+  const delta = mergedOne.richText('/doc').toDelta();
+  assert.ok(delta.some((op) => typeof op.insert === 'string' && op.insert.includes('hello') && op.attributes?.bold === true));
+  assert.ok(delta.some((op) => typeof op.insert === 'string' && op.insert.includes('world') && op.attributes?.italic === true));
+  assert.ok(mergedOne.richText('/doc').getBlocks().some((block) => block.attributes.heading === 2));
+  assert.ok(mergedOne.richText('/doc').getEmbeds().some((embed) => embed.value.image === 'updated.png'));
+
+  const clearA = mergedOne.fork({ actorId: 'hard-rich-clear-a' });
+  const clearB = mergedOne.fork({ actorId: 'hard-rich-clear-b' });
+  clearA.richText('/doc').clearFormat(0, 5, ['bold']);
+  clearB.richText('/doc').format(0, 5, { underline: true }, { expand: 'after', id: 'underline-hello' });
+  clearA.applyUpdate(clearB.exportUpdate(mergedOne.getStateVector()));
+  clearB.applyUpdate(clearA.exportUpdate(mergedOne.getStateVector()));
+  assert.deepStrictEqual(clearB.richText('/doc').toDelta(), clearA.richText('/doc').toDelta());
+  assert.ok(clearA.richText('/doc').toDelta().some((op) => op.attributes?.underline === true));
+}
+
+function replayRichText(baseUpdate, updates) {
+  const doc = createCrdtDocument({ actorId: 'hard-rich-replay-' + updates.length + '-' + updates[0]?.byteLength });
+  doc.applyUpdate(baseUpdate);
+  for (const update of updates) doc.applyUpdate(update);
+  return doc;
+}
+
+function testBranchViewAtAndMetadataMatrix() {
+  const doc = createCrdtDocument({ actorId: 'hard-branch-main' });
+  doc.change((tx) => {
+    tx.set('/title', 'start');
+  }, { metadata: { kind: 'seed' } });
+  const seedMark = doc.markVersion('seed', { metadata: { label: 'seed' } });
+  doc.change((tx) => {
+    tx.text('/body').insert(0, 'abc');
+    tx.list('/items').insert(0, [{ id: 'a' }]);
+  }, { metadata: { kind: 'body' } });
+  doc.markVersion('body');
+
+  const branch = createCrdtBranch(doc, { name: 'hard-feature', actorId: 'hard-branch-feature' });
+  branch.doc.change((tx) => {
+    tx.set('/title', 'feature');
+    tx.text('/body').insert(3, '!');
+  }, { metadata: { kind: 'feature' } });
+
+  assert.deepStrictEqual(doc.viewMark('seed'), { title: 'start' });
+  assert.deepStrictEqual(doc.checkoutMark('seed', { actorId: 'hard-branch-seed-checkout' }).toJSON(), doc.viewAt(seedMark.version));
+  assert.deepStrictEqual(doc.snapshotMark('body', { includeView: true }).view, doc.viewMark('body'));
+  assert.ok(doc.inspectVersion(null, { includeHistory: true }).history.length >= 1);
+  assert.strictEqual(doc.inspectVersion(null, { includeMetadata: true }).metadata?.kind, 'body');
+  assert.strictEqual(doc.getCommitMetadata(doc.getHeads()[0])?.kind, 'body');
+
+  const preview = branch.previewMergeInto(doc);
+  assert.strictEqual(preview.kind, 'fast-forward');
+  assert.strictEqual(preview.sourceName, 'hard-feature');
+  assert.ok(preview.updateBytes > 0);
+  branch.mergeInto(doc);
+  assert.deepStrictEqual(doc.toJSON(), branch.doc.toJSON());
+
+  const branchAfterMerge = createCrdtBranch(doc, { name: 'hard-already', actorId: 'hard-branch-already' });
+  assert.strictEqual(branchAfterMerge.previewMergeInto(doc).kind, 'already-merged');
+}
+
+function testPartialSyncPermutationMatrix() {
+  const source = createCrdtDocument({ actorId: 'hard-partial-source' });
+  source.change((tx) => {
+    tx.set('/title', 'partial');
+    tx.text('/body').insert(0, 'abcdef');
+    tx.list('/items').insert(0, [{ id: 'a' }, { id: 'b' }]);
+    tx.map('/meta').set('ready', true);
+  });
+  source.change((tx) => {
+    tx.text('/body').splice(2, 2, 'XY');
+    tx.list('/items').move(0, 1, 1);
+    tx.counter('/count').increment(5);
+  });
+  source.richText('/rich').insert(0, 'rich');
+  source.richText('/rich').format(0, 4, { bold: true });
+
+  const ops = decodeCrdtUpdate(source.exportUpdate()).ops;
+  const chunks = ops.map((op) => encodeCrdtUpdate({ actor: op.actor, seq: op.seq, deps: op.deps, ops: [op] }));
+  const targetA = createCrdtDocument({ actorId: 'hard-partial-a' });
+  const targetB = createCrdtDocument({ actorId: 'hard-partial-b' });
+  const targetC = createCrdtDocument({ actorId: 'hard-partial-c' });
+
+  for (const chunk of chunks) targetA.applyUpdate(chunk);
+  for (const chunk of chunks.slice().reverse()) targetB.applyUpdate(chunk);
+  for (let i = 0; i < chunks.length; i += 2) targetC.applyUpdate(chunks[i]);
+  for (let i = 1; i < chunks.length; i += 2) targetC.applyUpdate(chunks[i]);
+  for (const chunk of chunks) targetC.applyUpdate(chunk);
+
+  assert.deepStrictEqual(targetA.toJSON(), source.toJSON());
+  assert.deepStrictEqual(targetB.toJSON(), source.toJSON());
+  assert.deepStrictEqual(targetC.toJSON(), source.toJSON());
+  assert.strictEqual(targetC.applyUpdate(mergeCrdtUpdates(chunks)).viewPatch.length, 0);
+
+  const textOnly = filterCrdtUpdate(source.exportUpdate(), { paths: [['body']], pathMode: 'subtree' });
+  const textOnlyOps = decodeCrdtUpdate(textOnly).ops;
+  assert.ok(textOnlyOps.length > 0);
+  assert.ok(textOnlyOps.every((op) => op.path[0] === 'body'));
+}
+
 function testMalformedUpdateValidation() {
   const doc = createCrdtDocument({ actorId: 'hard-bad-update' });
   doc.change((tx) => {
@@ -174,7 +394,10 @@ function testMalformedUpdateValidation() {
   const badUpdates = [
     new Uint8Array([1, 2, 3]),
     valid.slice(0, Math.max(1, valid.byteLength - 1)),
+    valid.slice(0, Math.max(1, Math.floor(valid.byteLength / 2))),
     flipByte(valid, 0),
+    flipByte(valid, Math.floor(valid.byteLength / 2)),
+    appendGarbage(valid),
     new TextEncoder().encode('{not json'),
     validJson
   ];
@@ -244,7 +467,7 @@ function syncPair(source, target) {
 
 function applyRandomHardeningEdit(doc, rng, step) {
   const view = doc.toJSON();
-  const choice = randomInt(rng, 7);
+  const choice = randomInt(rng, 12);
   if (choice === 0) {
     doc.set('/shared', 'v' + step + '-' + randomInt(rng, 4));
   } else if (choice === 1) {
@@ -261,16 +484,48 @@ function applyRandomHardeningEdit(doc, rng, step) {
   } else if (choice === 5) {
     const items = Array.isArray(view.items) ? view.items : [];
     doc.list('/items').insert(randomInt(rng, items.length + 1), { id: doc.actorId + '-' + step, n: randomInt(rng, 10) });
-  } else {
+  } else if (choice === 6) {
     const items = Array.isArray(view.items) ? view.items : [];
     if (items.length !== 0) doc.list('/items').delete(randomInt(rng, items.length), 1);
+  } else if (choice === 7) {
+    const items = Array.isArray(view.items) ? view.items : [];
+    if (items.length < 2) doc.list('/items').insert(items.length, { id: doc.actorId + '-move-seed-' + step });
+    else doc.list('/items').move(randomInt(rng, items.length), randomInt(rng, items.length), 1);
+  } else if (choice === 8) {
+    doc.map('/meta').delete('k' + randomInt(rng, 3));
+  } else if (choice === 9) {
+    const rich = readRichText(view);
+    doc.richText('/rich').insert(randomInt(rng, rich.length + 1), String.fromCharCode(97 + randomInt(rng, 26)));
+  } else if (choice === 10) {
+    const rich = readRichText(view);
+    if (rich.length === 0) doc.richText('/rich').insert(0, 'r');
+    else {
+      const start = randomInt(rng, rich.length);
+      const length = 1 + randomInt(rng, rich.length - start);
+      doc.richText('/rich').format(start, length, randomInt(rng, 2) === 0 ? { bold: true } : { italic: true });
+    }
+  } else {
+    const rich = readRichText(view);
+    if (rich.length !== 0) doc.richText('/rich').clearFormat(randomInt(rng, rich.length), 1);
   }
+}
+
+function readRichText(view) {
+  const rich = view && typeof view === 'object' && view.rich && typeof view.rich === 'object' ? view.rich : undefined;
+  return rich && typeof rich.text === 'string' ? rich.text : '';
 }
 
 function flipByte(bytes, offset) {
   const out = bytes.slice();
   if (out.byteLength === 0) return new Uint8Array([255]);
   out[offset % out.byteLength] ^= 0xff;
+  return out;
+}
+
+function appendGarbage(bytes) {
+  const out = new Uint8Array(bytes.byteLength + 4);
+  out.set(bytes);
+  out.set([0xde, 0xad, 0xbe, 0xef], bytes.byteLength);
   return out;
 }
 

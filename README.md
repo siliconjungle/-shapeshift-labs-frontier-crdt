@@ -151,6 +151,8 @@ npm run bench
 npm run pack:dry
 ```
 
+The hardening suite covers concurrent map/list/text operations, list moves, same-key conflict introspection/resolution, undo refusal and non-overlapping replay, rich-text sidecars, branch/viewAt/metadata behavior, duplicate and partial update delivery, filtered updates, malformed update inputs, and randomized multi-peer convergence.
+
 ## Benchmarks
 
 Run the package-local benchmark:
@@ -163,16 +165,16 @@ Latest local package benchmark on Node v26.1.0, darwin arm64, 9 rounds:
 
 | Fixture | Median | p95 | Heap/op |
 | --- | ---: | ---: | ---: |
-| Local text insert transaction | 2.26 us | 6.29 us | - |
-| Incremental text typing, 100 chars | 156.18 us | 233.46 us | - |
-| Rich text anchored mark format | 28.23 us | 31.82 us | - |
-| Rich text boundary insert resolve | 39.55 us | 53.72 us | - |
-| Rich text Delta export, 6 spans | 21.61 us | 22.65 us | - |
-| Update inspect metadata | 8.39 us | 15.14 us | - |
-| Merge duplicate updates | 9.85 us | 11.70 us | - |
-| Retained heap: 100-char text doc | 147.69 us | 194.11 us | 17.85 KiB |
-| Retained heap: merged update replay | 179.43 us | 195.12 us | 5.68 KiB |
-| Retained heap: compacted update bytes | 351.80 us | 381.37 us | 998 B |
+| Local text insert transaction | 2.24 us | 6.66 us | - |
+| Incremental text typing, 100 chars | 167.34 us | 239.40 us | - |
+| Rich text anchored mark format | 30.45 us | 35.96 us | - |
+| Rich text boundary insert resolve | 39.32 us | 54.63 us | - |
+| Rich text Delta export, 6 spans | 19.36 us | 22.21 us | - |
+| Update inspect metadata | 6.34 us | 16.54 us | - |
+| Merge duplicate updates | 9.29 us | 11.84 us | - |
+| Retained heap: 100-char text doc | 147.30 us | 200.84 us | 17.84 KiB |
+| Retained heap: merged update replay | 185.19 us | 208.58 us | 5.58 KiB |
+| Retained heap: compacted update bytes | 374.32 us | 410.52 us | 916 B |
 
 These are Frontier-only package measurements, not competitor comparisons.
 
