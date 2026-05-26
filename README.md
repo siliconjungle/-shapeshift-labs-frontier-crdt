@@ -61,6 +61,16 @@ Frontier rich text is backed by the CRDT text container plus replicated mark/emb
 
 For local editor Delta transforms, range formatting, embed handling, and cursor/selection mapping outside the CRDT document itself, use [`@shapeshift-labs/frontier-richtext`](https://www.npmjs.com/package/@shapeshift-labs/frontier-richtext).
 
+The package boundary is:
+
+| Layer | Role |
+| --- | --- |
+| `@shapeshift-labs/frontier-richtext` | Local editor transform helpers: normalize/apply Deltas, map local cursors/selections, and prepare editor intent before it becomes collaborative state. |
+| `@shapeshift-labs/frontier-crdt` | Durable collaborative state: CRDT text, stable mark anchors, replicated mark/embed/block sidecars, update merge, conflict/version APIs, and Delta import/export at document boundaries. |
+| `@shapeshift-labs/frontier-react` or an editor package | Framework/editor bindings: React subscriptions, CodeMirror/Monaco/textarea decorations, remote selections, presence rendering, and app-specific editor UI. |
+
+In practice, editor code can use `frontier-richtext` to shape a local Delta, then commit the resulting intent to `doc.richText(path)`. Remote updates should be applied through `frontier-crdt`; the rich-text handle resolves stable anchors and exports the current editor-facing Delta with `toDelta()`.
+
 The mark model follows the practical Peritext/Loro direction:
 
 - Marks are stored as CRDT data with stable range anchors.
