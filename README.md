@@ -25,7 +25,10 @@ The published Frontier package family is generated from one shared package catal
 - [`@shapeshift-labs/frontier-schema`](https://www.npmjs.com/package/@shapeshift-labs/frontier-schema): JSON Schema validation, Frontier profile generation, CloudEvent envelopes, and query/table schema helpers.
 - [`@shapeshift-labs/frontier-migrations`](https://www.npmjs.com/package/@shapeshift-labs/frontier-migrations): Boundary-first data migrations, import normalization, plugin/API version mapping, versioned envelopes, graph diagnostics, patch path rewrites, dry-run reports, and current-shape rehydration.
 - [`@shapeshift-labs/frontier-event-log`](https://www.npmjs.com/package/@shapeshift-labs/frontier-event-log): Bounded event logs, replay cursors, consumer acknowledgements, keyed compaction, checkpoints, and Frontier patch event records.
+- [`@shapeshift-labs/frontier-run`](https://www.npmjs.com/package/@shapeshift-labs/frontier-run): Append-only distributed run graphs, causal event DAGs, evidence nodes, lanes, leases, refs, segments, dashboard projections, and admission decision records for Frontier agent work.
+- [`@shapeshift-labs/frontier-lease`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lease): Runtime-neutral semantic, file, package, and repository lease claims with fencing tokens, expiry, conflict checks, apply validation, and replayable evidence for Frontier collaboration.
 - [`@shapeshift-labs/frontier-inspect`](https://www.npmjs.com/package/@shapeshift-labs/frontier-inspect): Cross-package inspection/evidence bundles, registry graph snapshots, feature/resource impact reports, timeline/event normalization, redaction, JSONL import/export, and AI-readable app feature maps.
+- [`@shapeshift-labs/frontier-runtime-proof`](https://www.npmjs.com/package/@shapeshift-labs/frontier-runtime-proof): Runtime-neutral proof capsules, source-bound runtime telemetry, and admission evidence helpers for Frontier merge and review workflows.
 - [`@shapeshift-labs/frontier-scheduler`](https://www.npmjs.com/package/@shapeshift-labs/frontier-scheduler): Deterministic work scheduling, lanes, cancellation, backpressure, frame policies, replay snapshots, and work graphs.
 - [`@shapeshift-labs/frontier-logging`](https://www.npmjs.com/package/@shapeshift-labs/frontier-logging): Opt-in structured logging, browser telemetry, scheduled sinks, file sinks, exporters, benchmark traces, and Frontier patch/update summaries.
 - [`@shapeshift-labs/frontier-mutation`](https://www.npmjs.com/package/@shapeshift-labs/frontier-mutation): Explicit mutation and selector plans compiled to Frontier patches or CRDT operations.
@@ -40,16 +43,20 @@ The published Frontier package family is generated from one shared package catal
 - [`@shapeshift-labs/frontier-worker`](https://www.npmjs.com/package/@shapeshift-labs/frontier-worker): Serializable worker and edge task descriptors for Frontier apps, including queues, idempotency keys, retry and timeout policy, declared reads/writes/effects, snapshots, patch outputs, produced assets, execution records, logs, trace links, proof hashes, dedupe indexes, and registry graph output.
 - [`@shapeshift-labs/frontier-queue`](https://www.npmjs.com/package/@shapeshift-labs/frontier-queue): Serializable durable queue state, leases, retries, dedupe keys, patch-carrying jobs, dead-letter records, replay evidence, and queue inspection for Frontier apps.
 - [`@shapeshift-labs/frontier-swarm`](https://www.npmjs.com/package/@shapeshift-labs/frontier-swarm): Hierarchical swarm plans, lanes, compute profiles, ownership policy, semantic ownership regions, task queues, event streams, run records, merge bundles, merge indexes, queue overlays, merge admission, coordinator dashboards, changed-path checks, and proof artifacts for Frontier agent work.
-- [`@shapeshift-labs/frontier-swarm-codex`](https://www.npmjs.com/package/@shapeshift-labs/frontier-swarm-codex): Node Codex CLI adapter for Frontier swarm plans, including prompt rendering, worktree and snapshot workspaces, Codex argument compatibility, browser resource allocation, JSONL capture, verification commands, pid-backed stop, collect/apply workflows, merge indexes, queue overlays, merge bundles, normalized job evidence, coordinator query artifacts, and result artifacts.
+- [`@shapeshift-labs/frontier-swarm-git`](https://www.npmjs.com/package/@shapeshift-labs/frontier-swarm-git): Node Git, workspace, patch, changed-path, write-fence, package-link repair, patch check, HEAD read, blob hash, and apply-ledger adapter for Frontier swarm runners.
+- [`@shapeshift-labs/frontier-swarm-codex`](https://www.npmjs.com/package/@shapeshift-labs/frontier-swarm-codex): Node Codex CLI adapter for Frontier swarm plans, including prompt rendering, worktree and snapshot workspaces, Codex argument compatibility, browser resource allocation, JSONL capture, verification commands, pid-backed stop, collect/apply workflows, merge indexes, queue overlays, merge bundles, normalized job evidence, coordinator query artifacts, result artifacts, and run-log sync adapters.
+- [`@shapeshift-labs/frontier-loom-ui`](https://www.npmjs.com/package/@shapeshift-labs/frontier-loom-ui): Read-only Loom and Frontier operator dashboard for workspace-lifetime progress, active agents, queue state, evidence/admission status, run events, run-log sync projections, semantic leases, gate executions, git apply/workspace evidence, and coordinator steering intent files.
 - [`@shapeshift-labs/frontier-lang-kernel`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-kernel): Runtime-neutral semantic source graph, type/lattice/extern declarations, patch bundles, replay, hashing, evidence records, and merge-admission kernel for Frontier Lang.
 - [`@shapeshift-labs/frontier-lang-parser`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-parser): Dependency-light Frontier Lang parser for modules, entities, state, actions, effects, types, externs, targets, and lattice declarations.
 - [`@shapeshift-labs/frontier-lang-checker`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-checker): Checker and diagnostics for Frontier Lang semantic documents, including type symbols, effects, regions, lattice laws, CRDT metadata, and patch evidence.
 - [`@shapeshift-labs/frontier-lang-typescript`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-typescript): TypeScript projection adapter for Frontier Lang semantic documents, including type/entity/state/action/extern declarations and CRDT lattice descriptors.
 - [`@shapeshift-labs/frontier-lang-javascript`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-javascript): JavaScript projection adapter for Frontier Lang semantic documents, including ESM action stubs and schema/lattice descriptors.
+- [`@shapeshift-labs/frontier-lang-html`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-html): HTML semantic merge evidence and projection adapter for Frontier Lang semantic documents, including element tree identity, attributes, text/comment spans, source maps, and fail-closed browser/runtime proof gaps.
+- [`@shapeshift-labs/frontier-lang-css`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-css): CSS semantic merge evidence and projection adapter for Frontier Lang semantic documents, including selector specificity, declaration/cascade keys, custom properties, `@property` and `@page` descriptor evidence, CSS Modules/ICSS export and composition evidence, source maps, and fail-closed browser cascade/render proof gaps.
 - [`@shapeshift-labs/frontier-lang-rust`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-rust): Rust projection adapter for Frontier Lang semantic documents, including structs, aliases, and action stubs.
 - [`@shapeshift-labs/frontier-lang-python`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-python): Python projection adapter for Frontier Lang semantic documents, including dataclasses, typed patch records, and action stubs.
 - [`@shapeshift-labs/frontier-lang-c`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-c): C header projection adapter for Frontier Lang semantic documents, including structs and action prototypes.
-- [`@shapeshift-labs/frontier-lang-compiler`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-compiler): Compiler facade for Frontier Lang source documents, including parse, check, hash, diagnostics, universal AST envelopes, proof/paradigm semantic summaries, projection to TypeScript, JavaScript, Rust, Python, and C, and native source-import adapters for semantic merge evidence.
+- [`@shapeshift-labs/frontier-lang-compiler`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-compiler): Compiler facade for Frontier Lang source documents, including parse, check, hash, diagnostics, universal AST envelopes, proof/paradigm semantic summaries, projection to TypeScript, JavaScript, HTML, CSS, Rust, Python, and C, and native source-import adapters for semantic merge evidence.
 - [`@shapeshift-labs/frontier-lang-swift`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-swift): Swift source-language importer package for Frontier Lang semantic documents, including package-level metadata, SwiftSyntax adapter helpers, native import results, and semantic sidecar generation for SwiftSyntax/SwiftParser-shaped syntax trees.
 - [`@shapeshift-labs/frontier-lang-kotlin`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-kotlin): Kotlin PSI source-language importer package for Frontier Lang semantic documents, including package-level metadata, Kotlin PSI adapter helpers, native import results, and semantic sidecar generation for Kotlin PSI/KtFile-shaped syntax trees.
 - [`@shapeshift-labs/frontier-lang-java`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-java): Java source-language importer package for Frontier Lang semantic documents, including package-level metadata, Java AST adapter helpers, native import results, and semantic sidecar generation for javac/JDT/JavaParser-shaped ASTs.
@@ -57,7 +64,7 @@ The published Frontier package family is generated from one shared package catal
 - [`@shapeshift-labs/frontier-lang-csharp`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-csharp): C# Roslyn source-language importer package for Frontier Lang semantic documents, including package-level metadata, Roslyn adapter helpers, native import results, and semantic sidecar generation for SyntaxTree/SyntaxNode-shaped ASTs.
 - [`@shapeshift-labs/frontier-lang-clang`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-clang): Clang AST source-language importer package for Frontier Lang semantic documents, including package-level metadata, Clang AST JSON adapter helpers, native import results, and semantic sidecar generation for C/C++ translation units.
 - [`@shapeshift-labs/frontier-lang-cli`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang-cli): Command line interface for parsing, checking, hashing, emitting, native source import/projection, semantic slicing, and corpus roundtrip evidence for Frontier Lang projects.
-- [`@shapeshift-labs/frontier-lang`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang): Umbrella package for Frontier Lang kernel, parser, checker, compiler facade, universal AST helpers, projection adapters, and source-language importer adapters.
+- [`@shapeshift-labs/frontier-lang`](https://www.npmjs.com/package/@shapeshift-labs/frontier-lang): Umbrella package for Frontier Lang kernel, parser, checker, compiler facade, universal AST helpers, projection adapters, HTML/CSS semantic merge evidence adapters, and source-language importer adapters.
 - [`@shapeshift-labs/frontier-kv`](https://www.npmjs.com/package/@shapeshift-labs/frontier-kv): Serializable in-memory key/value state for Frontier apps, including TTL, versioned compare-and-set, batched patch mutations, scans, watchers, snapshots, JSONL event evidence, and replay verification.
 - [`@shapeshift-labs/frontier-kv-locks`](https://www.npmjs.com/package/@shapeshift-labs/frontier-kv-locks): Lease-style lock records on top of Frontier KV, including acquire, renew, release, fencing tokens, expiration, owner evidence, and replayable lock events.
 - [`@shapeshift-labs/frontier-kv-rate-limit`](https://www.npmjs.com/package/@shapeshift-labs/frontier-kv-rate-limit): Patch-native rate limit buckets for Frontier KV, including fixed windows, sliding windows, token buckets, deterministic refill, consume evidence, and reset records.
@@ -101,7 +108,7 @@ The published Frontier package family is generated from one shared package catal
 - [`@shapeshift-labs/frontier-realtime-server`](https://www.npmjs.com/package/@shapeshift-labs/frontier-realtime-server): Authoritative realtime room, tick, command validation, rate-limit, session, and snapshot-history runtime.
 - [`@shapeshift-labs/frontier-realtime-websocket`](https://www.npmjs.com/package/@shapeshift-labs/frontier-realtime-websocket): WebSocket client, wire, and Node room-server transport for Frontier realtime.
 - [`@shapeshift-labs/frontier-game`](https://www.npmjs.com/package/@shapeshift-labs/frontier-game): Game-facing entity, component, player, room, ownership, spatial interest, rollback, physics, and replication helpers above realtime.
-- [`@shapeshift-labs/loom`](https://www.npmjs.com/package/@shapeshift-labs/loom): Repo-level semantic collaboration CLI for .loom workspaces, including init, scan, status, graph snapshots, projection plans, Frontier Lang delegation, Frontier Swarm delegation, and Frontier Framework delegation.
+- [`@shapeshift-labs/loom`](https://www.npmjs.com/package/@shapeshift-labs/loom): Repo-level semantic collaboration CLI for .loom workspaces, including init, scan, status, graph snapshots, projection plans, Frontier Lang delegation, Frontier Swarm delegation, run-log sync command delegation, and Frontier Framework delegation.
 
 Package source repositories:
 
@@ -118,7 +125,10 @@ Package source repositories:
 - [`siliconjungle/-shapeshift-labs-frontier-schema`](https://github.com/siliconjungle/-shapeshift-labs-frontier-schema)
 - [`siliconjungle/-shapeshift-labs-frontier-migrations`](https://github.com/siliconjungle/-shapeshift-labs-frontier-migrations)
 - [`siliconjungle/-shapeshift-labs-frontier-event-log`](https://github.com/siliconjungle/-shapeshift-labs-frontier-event-log)
+- [`siliconjungle/-shapeshift-labs-frontier-run`](https://github.com/siliconjungle/-shapeshift-labs-frontier-run)
+- [`siliconjungle/-shapeshift-labs-frontier-lease`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lease)
 - [`siliconjungle/-shapeshift-labs-frontier-inspect`](https://github.com/siliconjungle/-shapeshift-labs-frontier-inspect)
+- [`siliconjungle/-shapeshift-labs-frontier-runtime-proof`](https://github.com/siliconjungle/-shapeshift-labs-frontier-runtime-proof)
 - [`siliconjungle/-shapeshift-labs-frontier-scheduler`](https://github.com/siliconjungle/-shapeshift-labs-frontier-scheduler)
 - [`siliconjungle/-shapeshift-labs-frontier-logging`](https://github.com/siliconjungle/-shapeshift-labs-frontier-logging)
 - [`siliconjungle/-shapeshift-labs-frontier-mutation`](https://github.com/siliconjungle/-shapeshift-labs-frontier-mutation)
@@ -133,12 +143,16 @@ Package source repositories:
 - [`siliconjungle/-shapeshift-labs-frontier-worker`](https://github.com/siliconjungle/-shapeshift-labs-frontier-worker)
 - [`siliconjungle/-shapeshift-labs-frontier-queue`](https://github.com/siliconjungle/-shapeshift-labs-frontier-queue)
 - [`siliconjungle/-shapeshift-labs-frontier-swarm`](https://github.com/siliconjungle/-shapeshift-labs-frontier-swarm)
+- [`siliconjungle/-shapeshift-labs-frontier-swarm-git`](https://github.com/siliconjungle/-shapeshift-labs-frontier-swarm-git)
 - [`siliconjungle/-shapeshift-labs-frontier-swarm-codex`](https://github.com/siliconjungle/-shapeshift-labs-frontier-swarm-codex)
+- [`siliconjungle/frontier-loom-ui`](https://github.com/siliconjungle/frontier-loom-ui)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-kernel`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-kernel)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-parser`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-parser)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-checker`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-checker)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-typescript`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-typescript)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-javascript`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-javascript)
+- [`siliconjungle/-shapeshift-labs-frontier-lang-html`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-html)
+- [`siliconjungle/-shapeshift-labs-frontier-lang-css`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-css)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-rust`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-rust)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-python`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-python)
 - [`siliconjungle/-shapeshift-labs-frontier-lang-c`](https://github.com/siliconjungle/-shapeshift-labs-frontier-lang-c)
@@ -271,36 +285,12 @@ import {
   decodeCrdtUpdate,
   diffCrdtUpdate,
   encodeCrdtUpdate,
-  encodeCrdtUpdateWithProfile,
   inspectCrdtUpdate,
   mergeCrdtUpdates
 } from '@shapeshift-labs/frontier-crdt/update';
 import { createCrdtBranch } from '@shapeshift-labs/frontier-crdt/branch';
 import { createCrdtUndoManager } from '@shapeshift-labs/frontier-crdt/undo';
 ```
-
-## Profile-Guided Update Codecs
-
-`getProfile()` now records learned CRDT workload shape in addition to per-path text plans. Profiles can classify text-heavy, grid-like, tree-move-heavy, sparse-actor, rich-text mark-heavy, and mixed workloads, then expose the preferred update codec through `profile.plans.codec.crdt` and `profile.plans.crdt.update`.
-
-```ts
-const doc = createCrdtDocument({ actorId: 'writer-a' });
-
-for (let row = 0; row < 4; row++) {
-  doc.change((tx) => {
-    tx.set(['grid', 'r' + row, 'c0'], row);
-    tx.set(['grid', 'r' + row, 'c1'], row + 1);
-  });
-}
-
-const profile = doc.getProfile();
-const update = doc.exportUpdate();
-
-const peer = createCrdtDocument({ actorId: 'reader-b', profile });
-peer.applyUpdate(update);
-```
-
-`encodeCrdtUpdateWithProfile(update, profile)` is also available on the `./update` subpath for storage or relay code that works with decoded update objects.
 
 ## Subpath Imports
 
@@ -335,6 +325,81 @@ console.log(evaluation.ok, evaluation.relation, evaluation.conflictingPaths);
 
 Frames store the causal version (`heads` plus `stateVector`) and optional bounded path snapshots. Plain version evaluation requires the document to be exactly at the authored version; path evaluation tolerates unrelated later CRDT operations and reports the changed/conflicting paths when watched state moved. Pass `includeValues: false` for overlap-only validation when a caller already owns value checks.
 
+## Patch-Native Views
+
+Every local commit and remote `applyUpdate()` returns a `CrdtCommitResult` with:
+
+- `update`: the encoded native CRDT update for storage or peers.
+- `viewPatch`: a compact Frontier patch from the previous materialized JSON view to the convergent current view.
+- `heads` and `stateVector`: the causal frontier after the commit.
+
+The state subpath can route those same patches to app adapters without re-diffing the document:
+
+```ts
+import { createCrdtStateEngine } from '@shapeshift-labs/frontier-crdt/state';
+
+const doc = createCrdtStateEngine({
+  actorId: 'ui-a',
+  patchSinks: [
+    ({ source, patch, result }) => {
+      // Feed state-cache invalidation, React external stores, logging, or undo observers.
+      console.log(source, patch.length, result.heads.length);
+    }
+  ]
+});
+
+doc.watch('/tasks/*', ['done'], (patch) => {
+  // Routed subset for UI subscriptions.
+});
+
+const result = doc.set('/tasks/0/done', true);
+console.log(result.viewPatch);
+```
+
+`onPatch()` adds a global sink after construction. Sinks receive only non-empty patches, after the embedded state engine has applied the patch, and the event keeps the original lazy commit result so reading `result.update` is still opt-in.
+
+## Lattice Merge Laws
+
+The `./lattice` subpath exposes state-based CRDT helpers for package tests and schema-level prototypes that need merge to be a join over a partial order:
+
+```ts
+import {
+  assertCrdtJoinLaws,
+  createCrdtScopedServerDiff,
+  createCrdtOrSetLattice,
+  addCrdtOrSetValue,
+  removeCrdtOrSetValue
+} from '@shapeshift-labs/frontier-crdt/lattice';
+
+const set = createCrdtOrSetLattice();
+const added = addCrdtOrSetValue(set.bottom(), 'task-1', 'alice:1');
+const removed = removeCrdtOrSetValue(added, 'task-1');
+
+assertCrdtJoinLaws(set, [added, removed]);
+```
+
+The built-in palette covers G-counters, PN-counters, observed-remove sets, observed-remove maps, and multi-value registers. `assertCrdtJoinLaws()` checks idempotence, commutativity, associativity, inflation, bottom, and sampled least-upper-bound behavior so max-only scalar merges or non-idempotent merge functions fail before becoming sync behavior.
+
+`createCrdtScopedServerDiff()` implements a state-based CRDT push response pattern: merge the submitted client delta into the server state, scope the response to the keys or elements touched by that delta, and send only the server-side lattice information the client did not submit. Clients still call the same `join()` on the response; they do not need a separate protocol branch for scoped responses.
+
+## Tombstone Compaction Plans
+
+Use `planCompaction()` when storage or sync policy has a durable retention frontier and wants to replace old CRDT history with a compact checkpoint:
+
+```ts
+const plan = doc.planCompaction({
+  retentionStateVector: lastAckedByEveryPeer,
+  retireActors: ['old-device']
+});
+
+if (plan.safe) {
+  const restored = createCrdtDocumentFromSnapshot(plan.snapshot);
+  console.log(restored.toJSON());
+}
+```
+
+The plan is intentionally a replacement checkpoint, not a normal delta update. `safe` is true only when the checkpoint preserves the materialized JSON view and `retentionStateVector` covers every source actor. Missing or lagging retention returns `reason: 'missing-retention'` or `reason: 'retention-behind'`, so callers do not accidentally garbage-collect tombstones that a lagging peer still needs. A safe plan reports compacted heads/state vector, retired-actor coverage, pruned operation counts, and before/after update bytes for storage policy decisions.
+
 ## Package Scope
 
 This package is intentionally limited to:
@@ -342,8 +407,8 @@ This package is intentionally limited to:
 - Native CRDT document creation and document handles.
 - CRDT JSON, map, list, plain text, counter, binary, tree, XML, and rich-text document operations.
 - CRDT update encode/decode/merge/diff/inspect/filter/obfuscate helpers.
-- Profile-guided CRDT update codec selection for learned workload families.
-- Durable versioning, bounded version frames, snapshots, checkout/fork helpers, branch wrappers, conflict introspection, awareness, and undo.
+- State-based lattice helpers and join-law assertions for CRDT field prototypes.
+- Durable versioning, bounded version frames, compaction checkpoints, snapshots, checkout/fork helpers, branch wrappers, conflict introspection, awareness, and undo.
 
 It does not expose sync providers, repos, storage adapters, document URLs, local sync networks, model-checking transports, WebSocket transports, or editor text bindings. Those belong in the higher `@shapeshift-labs/frontier-crdt-sync` and `@shapeshift-labs/frontier-crdt-websocket` packages.
 
@@ -351,10 +416,11 @@ It does not expose sync providers, repos, storage adapters, document URLs, local
 
 The stable package surface is the plain document/update layer:
 
-- `createCrdtDocument`, map/list/plain-text/counter/binary JSON operations, materialized view patches, state vectors, version frames, snapshots, checkout/fork/viewAt, changes-since exports, history traversal, commit metadata, and conflict introspection.
-- Update tooling in `@shapeshift-labs/frontier-crdt/update`: encode/decode, profile-guided encode, inspect, merge, diff, filter, compact, obfuscate, update metadata, actor ranges, and state-vector conversion.
+- `createCrdtDocument`, map/list/plain-text/counter/binary JSON operations, materialized view patches, state vectors, version frames, compaction plans, snapshots, checkout/fork/viewAt, changes-since exports, history traversal, commit metadata, and conflict introspection.
+- Update tooling in `@shapeshift-labs/frontier-crdt/update`: encode/decode, inspect, merge, diff, filter, compact, obfuscate, update metadata, actor ranges, and state-vector conversion.
 - Awareness and branch wrappers as package-level contracts above the document API.
 - Rich-text marks with anchored ranges, explicit boundary expansion, deterministic same-key ordering, and Delta export are usable for editor prototypes and higher-layer bindings.
+- Lattice helpers in `@shapeshift-labs/frontier-crdt/lattice` are a quality-gate and prototype surface for state-based field CRDTs; they are not used by the document runtime hot path.
 
 The experimental surface is intentionally marked as such:
 
@@ -387,29 +453,31 @@ Run the package-local benchmark:
 npm run bench
 ```
 
-Latest local package benchmark on Node v26.1.0, darwin arm64, 15 rounds:
+Latest local package benchmark on Node v26.1.0, darwin arm64, 9 rounds:
 
-| Fixture | Median | p95 | Bytes/op | Heap/op |
-| --- | ---: | ---: | ---: | ---: |
-| Local text insert transaction | 4.23 us | 10.81 us | - | - |
-| Transaction create/move/read locals | 32.52 us | 46.65 us | - | - |
-| Frame evaluate, 8 watched paths | 13.06 us | 27.36 us | - | - |
-| Incremental text typing, 100 chars | 198.74 us | 242.81 us | - | - |
-| Profile learn grid workload | 11.62 us | 35.80 us | - | - |
-| Auto grid update encode, 8 cells | 2.45 us | 5.77 us | 440 B | - |
-| Profile-guided grid update encode, 8 cells | 2.98 us | 6.70 us | 72 B | - |
-| Auto grid update apply, 8 cells | 25.25 us | 47.93 us | 440 B | - |
-| Profile-guided grid update apply, 8 cells | 28.72 us | 42.85 us | 72 B | - |
-| Rich text anchored mark format | 35.41 us | 41.72 us | - | - |
-| Rich text boundary insert resolve | 59.33 us | 95.37 us | - | - |
-| Rich text Delta export, 6 spans | 24.02 us | 33.72 us | - | - |
-| Update inspect metadata | 9.93 us | 19.88 us | - | - |
-| Merge duplicate updates | 11.81 us | 16.01 us | - | - |
-| Retained heap: 100-char text doc | 212.72 us | 265.60 us | - | 18.36 KiB |
-| Retained heap: merged update replay | 299.68 us | 356.96 us | - | 5.97 KiB |
-| Retained heap: compacted update bytes | 627.74 us | 833.83 us | - | 1.17 KiB |
+| Fixture | Median | p95 | Heap/op |
+| --- | ---: | ---: | ---: |
+| Local text insert transaction | 2.44 us | 5.22 us | - |
+| Transaction create/move/read locals | 28.73 us | 30.37 us | - |
+| Frame evaluate, 8 watched paths | 9.97 us | 18.31 us | - |
+| Incremental text typing, 100 chars | 160.18 us | 215.81 us | - |
+| Rich text anchored mark format | 28.30 us | 41.67 us | - |
+| Rich text boundary insert resolve | 38.90 us | 52.07 us | - |
+| Rich text Delta export, 6 spans | 19.66 us | 20.29 us | - |
+| Patch-native state sink dispatch | 3.60 us | 11.60 us | - |
+| Lattice join-law gate, 12 samples | 7.68 ms | 7.92 ms | - |
+| OR-map lattice merge, 64 keys | 136.96 us | 139.71 us | - |
+| Scoped OR-map server diff, 8 of 64 keys | 109.56 us | 111.86 us | - |
+| Tombstone compaction plan, 128 deletes | 160.50 us | 165.80 us | - |
+| Update inspect metadata | 5.22 us | 8.91 us | - |
+| Merge duplicate updates | 9.20 us | 12.52 us | - |
+| Retained heap: 100-char text doc | 154.63 us | 191.17 us | 17.96 KiB |
+| Retained heap: merged update replay | 181.59 us | 195.37 us | 5.57 KiB |
+| Retained heap: compacted update bytes | 361.73 us | 371.64 us | 880 B |
 
 These are Frontier-only package measurements, not competitor comparisons.
+
+The tombstone compaction fixture had 257 logical source operations, produced a 1-operation checkpoint, and reduced the update from 4,892 B to 141 B once the retention state vector covered the source history.
 
 ## License
 
